@@ -1,0 +1,33 @@
+# Only reviewed project sources and documentation belong in this repository.
+/*
+!/.gitignore
+!/.gitattributes
+!/README.md
+!/PRIVACY_CHECK.md
+!/app/
+
+# Private runtime data, credentials and machine-specific configuration.
+**/.env
+**/.env.*
+!**/.env.example
+**/credentials*.json
+**/secrets*.json
+**/key.properties
+**/local.properties
+**/*.jks
+**/*.keystore
+**/*.pem
+**/*.p12
+**/*.pfx
+**/id_rsa*
+**/id_ed25519*
+**/*.sqlite*
+**/*.db
+**/*.db-*
+**/*.log
+**/*.mp3
+**/*.m4a
+**/*.flac
+**/*.wav
+**/*.ogg
+**/*.aac

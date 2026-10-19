@@ -1,0 +1,30 @@
+name: focus_garden
+description: Offline focus timer, local music and evidence-based reports for Windows and Android.
+publish_to: none
+version: 1.0.1+2
+environment:
+  sdk: '>=3.5.0 <4.0.0'
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  drift: ^2.32.0
+  sqlite3: ^3.1.0
+  path_provider: ^2.1.5
+  path: ^1.9.1
+  uuid: ^4.5.1
+  file_picker: ^10.3.0
+  media_kit: ^1.2.0
+  media_kit_libs_windows_audio: ^1.0.9
+  window_manager: ^0.5.1
+  tray_manager: ^0.5.1
+  intl: any
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/tray.ico

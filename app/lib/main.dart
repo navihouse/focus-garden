@@ -1,0 +1,1336 @@
+import 'dart:io';
+import 'dart:convert';
+import 'dart:math' as math;
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:media_kit/media_kit.dart';
+import 'package:path/path.dart' as p;
+import 'package:tray_manager/tray_manager.dart';
+import 'package:window_manager/window_manager.dart';
+import 'app_controller.dart';
+import 'data/backup.dart';
+import 'domain/models.dart';
+import 'domain/reports.dart';
+import 'domain/timer_engine.dart';
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  if (Platform.isWindows) {
+    MediaKit.ensureInitialized();
+    await windowManager.ensureInitialized();
+    await windowManager.setMinimumSize(const Size(460, 640));
+    await windowManager.setSize(const Size(1140, 820));
+    await windowManager.setTitle('专注花园 · Focus Garden');
+  }
+  final controller = AppController();
+  try {
+    await controller.initialize();
+    runApp(FocusApp(controller));
+  } catch (e) {
+    runApp(MaterialApp(
+        home: Scaffold(
+            body: Center(
+                child: SelectableText('启动未完成\n$e\n请保留数据文件，检查磁盘空间后重试。')))));
+  }
+}
+
+String minutes(int ms) => (ms / 60000).toStringAsFixed(1);
+String dateText(DateTime d) =>
+    '${d.year}.${d.month.toString().padLeft(2, '0')}.${d.day.toString().padLeft(2, '0')}';
+String clockText(int ms) {
+  final seconds = (ms / 1000).ceil();
+  return '${(seconds ~/ 60).toString().padLeft(2, '0')}:${(seconds % 60).toString().padLeft(2, '0')}';
+}
+
+const taskStatuses = {'todo': '待办', 'doing': '进行中', 'done': '已完成'};
+const reasons = {
+  'completed': '完整完成',
+  'early': '提前结束',
+  'interrupted': '意外中断',
+  'sleep': '电脑睡眠',
+  'exit': '退出应用'
+};
+
+class FocusApp extends StatefulWidget {
+  final AppController controller;
+  const FocusApp(this.controller, {super.key});
+  @override
+  State<FocusApp> createState() => _FocusAppState();
+}
+
+class _FocusAppState extends State<FocusApp>
+    with WindowListener, TrayListener, WidgetsBindingObserver {
+  AppController get c => widget.controller;
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    if (Platform.isWindows) {
+      windowManager.addListener(this);
+      trayManager.addListener(this);
+      _prepareTray();
+    }
+  }
+
+  Future<void> _prepareTray() async {
+    await trayManager.setIcon(p.join(p.dirname(Platform.resolvedExecutable),
+        'data', 'flutter_assets', 'assets', 'tray.ico'));
+    await trayManager.setToolTip('专注花园');
+    await trayManager.setContextMenu(Menu(items: [
+      MenuItem(key: 'show', label: '打开专注花园'),
+      MenuItem.separator(),
+      MenuItem(key: 'quit', label: '保存并退出')
+    ]));
+    await windowManager.setPreventClose(true);
+  }
+
+  @override
+  void onWindowMinimize() {
+    windowManager.hide();
+  }
+
+  @override
+  void onWindowClose() {
+    windowManager.hide();
+  }
+
+  @override
+  void onTrayIconMouseDown() {
+    windowManager.show();
+    windowManager.focus();
+  }
+
+  @override
+  void onTrayIconRightMouseDown() {
+    trayManager.popUpContextMenu();
+  }
+
+  @override
+  void onTrayMenuItemClick(MenuItem item) async {
+    if (item.key == 'show') {
+      await windowManager.show();
+      await windowManager.focus();
+    }
+    if (item.key == 'quit') {
+      await c.shutdown();
+      await trayManager.destroy();
+      await windowManager.destroy();
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && c.android) {
+      c.perform(() async {
+        await c.pollAndroid();
+        c.permissions =
+            asJson(await AppController.native.invokeMethod('permissions'));
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+      listenable: c,
+      builder: (_, child) {
+        ThemeData theme(Brightness brightness) => ThemeData(
+            useMaterial3: true,
+            brightness: brightness,
+            colorSchemeSeed: const Color(0xff476e58),
+            scaffoldBackgroundColor: brightness == Brightness.light
+                ? const Color(0xfff6f7f2)
+                : const Color(0xff141a17),
+            cardTheme:
+                const CardThemeData(elevation: 0, margin: EdgeInsets.zero),
+            inputDecorationTheme: const InputDecorationTheme(
+                border: OutlineInputBorder(), isDense: true));
+        return MaterialApp(
+            title: '专注花园',
+            debugShowCheckedModeBanner: false,
+            locale: const Locale('zh', 'CN'),
+            supportedLocales: const [Locale('zh', 'CN'), Locale('en')],
+            localizationsDelegates: GlobalMaterialLocalizations.delegates,
+            theme: theme(Brightness.light),
+            darkTheme: theme(Brightness.dark),
+            themeMode: c.settings.theme == 'light'
+                ? ThemeMode.light
+                : c.settings.theme == 'dark'
+                    ? ThemeMode.dark
+                    : ThemeMode.system,
+            home: Home(c));
+      });
+}
+
+class Home extends StatefulWidget {
+  final AppController c;
+  const Home(this.c, {super.key});
+  @override
+  State<Home> createState() => _HomeState();
+}
+
+class _HomeState extends State<Home> {
+  int page = 0;
+  AppController get c => widget.c;
+  static const titles = ['专注', '任务', '音乐库', '历史记录', '统计报告'];
+  static const icons = [
+    Icons.timelapse_rounded,
+    Icons.checklist_rounded,
+    Icons.library_music_outlined,
+    Icons.history_rounded,
+    Icons.insights_rounded
+  ];
+  @override
+  Widget build(BuildContext context) {
+    final wide = MediaQuery.sizeOf(context).width >= 850;
+    final body = switch (page) {
+      0 => focusPage(),
+      1 => taskPage(),
+      2 => musicPage(),
+      3 => HistoryPage(c),
+      _ => ReportsPage(c)
+    };
+    return Scaffold(
+        appBar: AppBar(
+            title: Text(wide ? '专注花园  /  ${titles[page]}' : titles[page]),
+            actions: [
+              IconButton(
+                  tooltip: '备份与合并',
+                  onPressed: backupDialog,
+                  icon: const Icon(Icons.import_export)),
+              IconButton(
+                  tooltip: '设置',
+                  onPressed: settingsDialog,
+                  icon: const Icon(Icons.tune)),
+              const SizedBox(width: 12)
+            ]),
+        bottomNavigationBar: wide
+            ? null
+            : NavigationBar(
+                selectedIndex: page,
+                onDestinationSelected: (v) => setState(() => page = v),
+                destinations: List.generate(
+                    5,
+                    (i) => NavigationDestination(
+                        icon: Icon(icons[i]), label: titles[i]))),
+        body: Row(children: [
+          if (wide)
+            NavigationRail(
+                selectedIndex: page,
+                labelType: NavigationRailLabelType.all,
+                onDestinationSelected: (v) => setState(() => page = v),
+                destinations: List.generate(
+                    5,
+                    (i) => NavigationRailDestination(
+                        icon: Icon(icons[i]), label: Text(titles[i])))),
+          Expanded(
+              child: Column(children: [
+            if (c.message.isNotEmpty)
+              MaterialBanner(content: Text(c.message), actions: [
+                TextButton(
+                    onPressed: () => setState(() => c.message = ''),
+                    child: const Text('知道了'))
+              ]),
+            if (c.recoveryMessage.isNotEmpty)
+              MaterialBanner(content: Text(c.recoveryMessage), actions: [
+                TextButton(
+                    onPressed: () => setState(() => c.recoveryMessage = ''),
+                    child: const Text('知道了'))
+              ]),
+            Expanded(child: body),
+          ])),
+        ]));
+  }
+
+  Widget section(String title, Widget child, {String? subtitle}) => Card(
+      child: Padding(
+          padding: const EdgeInsets.all(22),
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(title, style: Theme.of(context).textTheme.titleMedium),
+            if (subtitle != null)
+              Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(subtitle,
+                      style: Theme.of(context).textTheme.bodySmall)),
+            const SizedBox(height: 18),
+            child
+          ])));
+  Widget focusPage() {
+    final now = DateTime.now().toUtc();
+    final today = beijing(now);
+    final day = dayKey(today);
+    final week = buildReport(c.sessions, ReportPeriod(PeriodKind.week, today));
+    final todayMs = week.daily[day] ?? 0;
+    final status = c.isRest
+        ? '给自己一点休息时间'
+        : c.phase == Phase.paused
+            ? '计时已暂停'
+            : c.phase == Phase.focus
+                ? '把注意力留给眼前这一件事'
+                : '从一段安静的专注开始';
+    return ListView(padding: const EdgeInsets.all(24), children: [
+      Text(status, style: Theme.of(context).textTheme.headlineSmall),
+      const SizedBox(height: 8),
+      const Text('离线记录 · 音乐相伴 · 每一点投入都算数'),
+      const SizedBox(height: 24),
+      Card(
+          child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(children: [
+                SizedBox(
+                    width: 420,
+                    child: DropdownButtonFormField<String?>(
+                        initialValue: c.selectedTask,
+                        decoration: const InputDecoration(labelText: '本次任务'),
+                        items: [
+                          const DropdownMenuItem(
+                              value: null, child: Text('自由专注')),
+                          ...c.tasks
+                              .where((t) =>
+                                  t.status != 'done' || t.id == c.selectedTask)
+                              .map((t) => DropdownMenuItem(
+                                  value: t.id,
+                                  child: Text(t.name,
+                                      overflow: TextOverflow.ellipsis)))
+                        ],
+                        onChanged: c.active
+                            ? null
+                            : (v) => setState(() => c.selectedTask = v))),
+                const SizedBox(height: 30),
+                SizedBox(
+                    width: 260,
+                    height: 260,
+                    child: Stack(alignment: Alignment.center, children: [
+                      SizedBox.expand(
+                          child: CircularProgressIndicator(
+                              strokeWidth: 8,
+                              value: (1 -
+                                      c.remainingMs / math.max(1, c.durationMs))
+                                  .clamp(0, 1),
+                              backgroundColor: Theme.of(context)
+                                  .colorScheme
+                                  .surfaceContainerHighest,
+                              color: c.isRest
+                                  ? Colors.teal
+                                  : Theme.of(context).colorScheme.primary)),
+                      Column(mainAxisSize: MainAxisSize.min, children: [
+                        Text(c.isRest ? '休息' : '专注',
+                            style: Theme.of(context).textTheme.labelLarge),
+                        Text(clockText(c.remainingMs),
+                            style: const TextStyle(
+                                fontSize: 58,
+                                fontWeight: FontWeight.w300,
+                                fontFeatures: [FontFeature.tabularFigures()])),
+                        Text(c.phase == Phase.paused
+                            ? '已暂停'
+                            : c.phase == Phase.focus || c.isRest
+                                ? '正在计时'
+                                : '准备就绪')
+                      ]),
+                    ])),
+                const SizedBox(height: 28),
+                Wrap(
+                    spacing: 12,
+                    runSpacing: 12,
+                    alignment: WrapAlignment.center,
+                    children: [
+                      if (!c.active)
+                        FilledButton.icon(
+                            onPressed: () => c.perform(c.startFocus),
+                            icon: const Icon(Icons.play_arrow),
+                            label: const Text('开始专注')),
+                      if (c.active)
+                        FilledButton.icon(
+                            onPressed: () => c.perform(c.pauseResume),
+                            icon: Icon(c.phase == Phase.paused
+                                ? Icons.play_arrow
+                                : Icons.pause),
+                            label: Text(
+                                c.phase == Phase.paused ? '继续计时' : '暂停计时')),
+                      if (c.active)
+                        OutlinedButton(
+                            onPressed: () => c.perform(() => c.end()),
+                            child: const Text('提前结束')),
+                      if (!c.active)
+                        OutlinedButton(
+                            onPressed: () => c.perform(c.startRest),
+                            child: Text(c.completedCycle > 0 &&
+                                    c.completedCycle % 4 == 0
+                                ? '开始长休息'
+                                : '开始短休息')),
+                    ]),
+                const SizedBox(height: 18),
+                Text('本轮已完成 ${c.completedCycle % 4} / 4 个番茄 · 下一阶段手动开始'),
+                const SizedBox(height: 20),
+                musicControls(),
+              ]))),
+      const SizedBox(height: 20),
+      Wrap(spacing: 16, runSpacing: 16, children: [
+        metric('今日专注', '${minutes(todayMs)} 分钟'),
+        metric('本周投入', '${minutes(week.milliseconds)} 分钟'),
+        metric('本周完成', '${week.completed} 个番茄')
+      ]),
+      if (c.android &&
+          (c.permissions['notifications'] != true ||
+              c.permissions['exact'] != true))
+        Padding(
+            padding: const EdgeInsets.only(top: 20),
+            child: section(
+                '提醒权限',
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text('通知或准确提醒权限尚未开启，到点提醒可能不显示或延迟。计时记录仍会保存。'),
+                  TextButton(
+                      onPressed: () => c.perform(() async {
+                            await AppController.native
+                                .invokeMethod('requestPermissions');
+                          }),
+                      child: const Text('开启提醒权限'))
+                ]))),
+      if (Platform.isWindows)
+        const Padding(
+            padding: EdgeInsets.only(top: 20),
+            child: Text('关闭窗口或最小化后仍在托盘运行；右键托盘图标可保存并退出。')),
+    ]);
+  }
+
+  Widget metric(String label, String value) => SizedBox(
+      width: MediaQuery.sizeOf(context).width < 650
+          ? (MediaQuery.sizeOf(context).width - 64) / 2
+          : 205,
+      child: Card(
+          child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(label),
+                    const SizedBox(height: 8),
+                    Text(value, style: Theme.of(context).textTheme.titleLarge)
+                  ]))));
+  Widget musicControls() => Column(children: [
+        Text(
+            c.tracks.isEmpty
+                ? '还没有音乐，可以前往音乐库添加'
+                : c.tracks[c.trackIndex.clamp(0, c.tracks.length - 1)]['name']
+                    as String,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis),
+        Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            alignment: WrapAlignment.center,
+            children: [
+              IconButton(
+                  tooltip: '上一首',
+                  onPressed: c.tracks.isEmpty
+                      ? null
+                      : () => c.perform(() => c.music('previous')),
+                  icon: const Icon(Icons.skip_previous)),
+              IconButton(
+                  tooltip: c.playing ? '暂停音乐' : '播放音乐',
+                  onPressed: c.tracks.isEmpty
+                      ? null
+                      : () => c.perform(() => c.music('toggle')),
+                  icon: Icon(c.playing
+                      ? Icons.pause_circle_outline
+                      : Icons.play_circle_outline)),
+              IconButton(
+                  tooltip: '下一首',
+                  onPressed: c.tracks.isEmpty
+                      ? null
+                      : () => c.perform(() => c.music('next')),
+                  icon: const Icon(Icons.skip_next)),
+              IconButton(
+                  tooltip: '随机播放',
+                  onPressed: () => c.perform(() => c.music('shuffle')),
+                  color:
+                      c.shuffle ? Theme.of(context).colorScheme.primary : null,
+                  icon: const Icon(Icons.shuffle)),
+              IconButton(
+                  tooltip:
+                      '循环：${{'all': '列表', 'one': '单曲', 'off': '关闭'}[c.repeat]}',
+                  onPressed: () => c.perform(() => c.music('repeat')),
+                  icon:
+                      Icon(c.repeat == 'one' ? Icons.repeat_one : Icons.repeat),
+                  color: c.repeat != 'off'
+                      ? Theme.of(context).colorScheme.primary
+                      : null),
+              IconButton(
+                  tooltip: c.muted ? '取消静音' : '保持静音',
+                  onPressed: () => c.perform(() => c.music('mute')),
+                  icon: Icon(c.muted ? Icons.volume_off : Icons.volume_up)),
+              SizedBox(
+                  width: 125,
+                  child: Slider(
+                      value: c.volume,
+                      onChanged: (v) => c.perform(() => c.music('volume', v)))),
+            ]),
+      ]);
+  Widget taskPage() => ListView(padding: const EdgeInsets.all(24), children: [
+        Row(children: [
+          Expanded(
+              child: Text('把大目标，变成眼前的小任务',
+                  style: Theme.of(context).textTheme.titleLarge)),
+          FilledButton.icon(
+              onPressed: () => editTask(),
+              icon: const Icon(Icons.add),
+              label: const Text('新建'))
+        ]),
+        const SizedBox(height: 20),
+        if (c.tasks.isEmpty)
+          const Padding(
+              padding: EdgeInsets.all(40),
+              child: Text('还没有任务。添加一个任务，记录预计番茄数与实际投入。')),
+        ...c.tasks.map((t) {
+          final records =
+              c.sessions.where((s) => s.taskId == t.id && !s.excluded);
+          return Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Card(
+                  child: ListTile(
+                      leading: Icon(t.status == 'done'
+                          ? Icons.check_circle_outline
+                          : Icons.radio_button_unchecked),
+                      title: Text(t.name),
+                      subtitle: Text(
+                          '${t.category.isEmpty ? '未分类' : t.category} · ${taskStatuses[t.status]}\n'
+                          '完成 ${records.where((s) => s.completed).length} / ${t.estimate} 个番茄 · ${minutes(records.fold(0, (n, s) => n + s.milliseconds))} 分钟${t.due == null ? '' : '\n截止 ${dateText(t.due!)}'}'),
+                      isThreeLine: true,
+                      onTap: () => editTask(t),
+                      trailing: PopupMenuButton<String>(
+                          onSelected: (v) => c.perform(() async {
+                                await c.store.task(TaskItem.fromJson({
+                                  ...t.toJson(),
+                                  'status': v,
+                                  'modified':
+                                      DateTime.now().toUtc().toIso8601String()
+                                }));
+                                await c.refresh();
+                              }),
+                          itemBuilder: (_) => taskStatuses.entries
+                              .map((e) => PopupMenuItem(
+                                  value: e.key, child: Text(e.value)))
+                              .toList()))));
+        }),
+      ]);
+  Future<void> editTask([TaskItem? task]) async {
+    final form = GlobalKey<FormState>();
+    final name = TextEditingController(text: task?.name),
+        category = TextEditingController(text: task?.category),
+        estimate = TextEditingController(text: '${task?.estimate ?? 1}');
+    DateTime? due = task?.due;
+    String status = task?.status ?? 'todo';
+    final saved = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => StatefulBuilder(
+            builder: (ctx, update) => AlertDialog(
+                    title: Text(task == null ? '新建任务' : '编辑任务'),
+                    content: SizedBox(
+                        width: 430,
+                        child: SingleChildScrollView(
+                            child: Form(
+                                key: form,
+                                child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      TextFormField(
+                                          controller: name,
+                                          maxLength: 200,
+                                          decoration: const InputDecoration(
+                                              labelText: '任务名称'),
+                                          validator: (v) => v!.trim().isEmpty
+                                              ? '请填写任务名称'
+                                              : null),
+                                      const SizedBox(height: 12),
+                                      TextFormField(
+                                          controller: category,
+                                          maxLength: 100,
+                                          decoration: const InputDecoration(
+                                              labelText: '科目或项目')),
+                                      const SizedBox(height: 12),
+                                      TextFormField(
+                                          controller: estimate,
+                                          keyboardType: TextInputType.number,
+                                          decoration: const InputDecoration(
+                                              labelText: '预计番茄数'),
+                                          validator: (v) =>
+                                              (int.tryParse(v ?? '') ?? 0) <
+                                                          1 ||
+                                                      (int.tryParse(v ?? '') ??
+                                                              0) >
+                                                          999
+                                                  ? '填写 1–999'
+                                                  : null),
+                                      const SizedBox(height: 16),
+                                      DropdownButtonFormField<String>(
+                                          initialValue: status,
+                                          decoration: const InputDecoration(
+                                              labelText: '状态'),
+                                          items: taskStatuses.entries
+                                              .map((e) => DropdownMenuItem(
+                                                  value: e.key,
+                                                  child: Text(e.value)))
+                                              .toList(),
+                                          onChanged: (v) => status = v!),
+                                      const SizedBox(height: 8),
+                                      Row(children: [
+                                        Expanded(
+                                            child: Text(due == null
+                                                ? '不设截止日期'
+                                                : dateText(due!))),
+                                        TextButton(
+                                            onPressed: () async {
+                                              final selected =
+                                                  await showDatePicker(
+                                                      context: ctx,
+                                                      initialDate:
+                                                          due ?? DateTime.now(),
+                                                      firstDate: DateTime(2000),
+                                                      lastDate: DateTime(2100));
+                                              if (selected != null) {
+                                                update(() => due = selected);
+                                              }
+                                            },
+                                            child: const Text('选择日期')),
+                                        IconButton(
+                                            onPressed: () =>
+                                                update(() => due = null),
+                                            icon: const Icon(Icons.clear))
+                                      ]),
+                                    ])))),
+                    actions: [
+                      TextButton(
+                          onPressed: () => Navigator.pop(ctx, false),
+                          child: const Text('取消')),
+                      FilledButton(
+                          onPressed: () {
+                            if (form.currentState!.validate()) {
+                              Navigator.pop(ctx, true);
+                            }
+                          },
+                          child: const Text('保存'))
+                    ])));
+    if (saved == true) {
+      await c.perform(() async {
+        await c.store.task(TaskItem(
+            id: task?.id ?? AppController.uuid.v4(),
+            name: name.text.trim(),
+            category: category.text.trim(),
+            status: status,
+            estimate: int.parse(estimate.text),
+            due: due,
+            modified: DateTime.now().toUtc()));
+        await c.refresh();
+      });
+    }
+    name.dispose();
+    category.dispose();
+    estimate.dispose();
+  }
+
+  Widget musicPage() => ListView(padding: const EdgeInsets.all(24), children: [
+        Row(children: [
+          Expanded(
+              child: Text('你的本地音乐',
+                  style: Theme.of(context).textTheme.titleLarge)),
+          FilledButton.icon(
+              onPressed: addMusic,
+              icon: const Icon(Icons.add),
+              label: const Text('添加文件'))
+        ]),
+        const SizedBox(height: 8),
+        Text(c.android
+            ? '音乐会复制到本应用的本地音乐库，重启后仍可播放。卸载应用会删除副本。'
+            : '使用原文件路径；移动文件后请重新添加。音乐不会进入备份文件。'),
+        const SizedBox(height: 20),
+        section('播放器', musicControls()),
+        const SizedBox(height: 8),
+        Text(c.android
+            ? '开始专注后可播放音乐；暂停计时、结束或休息时会自动暂停。'
+            : '导入后可直接点击播放试听，不会生成专注记录。暂停计时、结束或休息时会自动暂停音乐。'),
+        const SizedBox(height: 20),
+        if (c.tracks.isEmpty)
+          const Padding(
+              padding: EdgeInsets.all(40),
+              child: Text('选择 MP3、FLAC、WAV 或 M4A 文件。专注开始时会自动播放。')),
+        ...c.tracks.indexed.map((entry) => ListTile(
+            leading: Icon(entry.$1 == c.trackIndex && c.playing
+                ? Icons.graphic_eq
+                : Icons.music_note_outlined),
+            title: Text(entry.$2['name'] as String),
+            subtitle: Text(entry.$2['path'] as String,
+                maxLines: 1, overflow: TextOverflow.ellipsis),
+            onTap: () => c.perform(() => c.music('select', entry.$1)),
+            trailing: IconButton(
+                tooltip: '从音乐库移除',
+                icon: const Icon(Icons.close),
+                onPressed: () => c.perform(() async {
+                      final removed = c.tracks.removeAt(entry.$1);
+                      c.trackIndex = 0;
+                      await c.saveTracks();
+                      if (c.android) {
+                        final file = File(removed['path'] as String);
+                        if (await file.exists()) await file.delete();
+                      }
+                    })))),
+      ]);
+  Future<void> addMusic() async {
+    await c.perform(() async {
+      final files = await FilePicker.platform.pickFiles(
+          allowMultiple: true,
+          type: FileType.custom,
+          allowedExtensions: ['mp3', 'flac', 'wav', 'm4a', 'ogg', 'aac']);
+      if (files == null) return;
+      for (final file in files.files) {
+        if (file.path == null) continue;
+        String path = file.path!;
+        if (c.android) {
+          final folder = Directory(p.join(c.dataDirectory.path, 'music'));
+          await folder.create(recursive: true);
+          path = p.join(folder.path,
+              '${AppController.uuid.v4()}${p.extension(file.name)}');
+          await File(file.path!).copy(path);
+        }
+        if (!c.tracks.any((t) => t['path'] == path)) {
+          c.tracks.add(
+              {'id': AppController.uuid.v4(), 'name': file.name, 'path': path});
+        }
+      }
+      await c.saveTracks();
+    });
+  }
+
+  Future<void> settingsDialog() async {
+    final form = GlobalKey<FormState>();
+    final focus = TextEditingController(text: '${c.settings.focus}'),
+        short = TextEditingController(text: '${c.settings.shortBreak}'),
+        long = TextEditingController(text: '${c.settings.longBreak}');
+    final goals = {
+      for (final kind in PeriodKind.values)
+        kind.name: TextEditingController(
+            text: c.settings.goals[kind.name]?.toString() ?? '')
+    };
+    String theme = c.settings.theme;
+    final result = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+                title: const Text('专注设置'),
+                content: SizedBox(
+                    width: 430,
+                    child: SingleChildScrollView(
+                        child: Form(
+                            key: form,
+                            child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  for (final pair in [
+                                    (focus, '专注分钟'),
+                                    (short, '短休息分钟'),
+                                    (long, '长休息分钟')
+                                  ])
+                                    Padding(
+                                        padding:
+                                            const EdgeInsets.only(bottom: 14),
+                                        child: TextFormField(
+                                            controller: pair.$1,
+                                            keyboardType: TextInputType.number,
+                                            decoration: InputDecoration(
+                                                labelText: pair.$2),
+                                            validator: (v) =>
+                                                (int.tryParse(v ?? '') ?? 0) <
+                                                            1 ||
+                                                        (int.tryParse(
+                                                                    v ?? '') ??
+                                                                0) >
+                                                            180
+                                                    ? '填写 1–180'
+                                                    : null)),
+                                  DropdownButtonFormField<String>(
+                                      initialValue: theme,
+                                      decoration: const InputDecoration(
+                                          labelText: '主题'),
+                                      items: const [
+                                        DropdownMenuItem(
+                                            value: 'system',
+                                            child: Text('跟随系统')),
+                                        DropdownMenuItem(
+                                            value: 'light', child: Text('浅色')),
+                                        DropdownMenuItem(
+                                            value: 'dark', child: Text('深色'))
+                                      ],
+                                      onChanged: (v) => theme = v!),
+                                  const SizedBox(height: 20),
+                                  const Text('可选目标：填写每个周期的专注分钟数；留空则不设目标。'),
+                                  for (final entry in goals.entries)
+                                    Padding(
+                                        padding: const EdgeInsets.only(top: 14),
+                                        child: TextFormField(
+                                            controller: entry.value,
+                                            keyboardType: TextInputType.number,
+                                            decoration: InputDecoration(
+                                                labelText: '${{
+                                              'week': '每周',
+                                              'month': '每月',
+                                              'year': '每年'
+                                            }[entry.key]}目标（分钟）'),
+                                            validator: (v) => v!.isEmpty ||
+                                                    ((int.tryParse(v) ?? 0) >
+                                                            0 &&
+                                                        (int.tryParse(v) ??
+                                                                0) <=
+                                                            525600)
+                                                ? null
+                                                : '填写正整数，或留空')),
+                                  const SizedBox(height: 14),
+                                  const Text(
+                                      '统计时区固定为北京时间（UTC+8），每周从周一开始。修改时长从下一次计时生效。'),
+                                ])))),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('取消')),
+                  FilledButton(
+                      onPressed: () {
+                        if (form.currentState!.validate()) {
+                          Navigator.pop(ctx, true);
+                        }
+                      },
+                      child: const Text('保存'))
+                ]));
+    if (result == true) {
+      await c.perform(() => c.saveSettings(Settings(
+              focus: int.parse(focus.text),
+              shortBreak: int.parse(short.text),
+              longBreak: int.parse(long.text),
+              theme: theme,
+              goals: {
+                for (final e in goals.entries)
+                  if (e.value.text.isNotEmpty) e.key: int.parse(e.value.text)
+              })));
+    }
+    for (final field in [focus, short, long, ...goals.values]) {
+      field.dispose();
+    }
+  }
+
+  Future<void> backupDialog() async {
+    await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+                title: const Text('备份与合并'),
+                content: const Text(
+                    '备份包含任务与专注记录，不包含音乐和设备设置。可用同一备份在电脑与手机间合并记录；请先备份，再卸载应用。'),
+                actions: [
+                  TextButton(
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        importData();
+                      },
+                      child: const Text('导入并预览')),
+                  FilledButton(
+                      onPressed: () async {
+                        Navigator.pop(ctx);
+                        await c.perform(() async {
+                          final bytes =
+                              utf8.encode(exportBackup(c.tasks, c.sessions));
+                          final file = await FilePicker.platform.saveFile(
+                              dialogTitle: '导出备份',
+                              fileName:
+                                  'focus-garden-${dayKey(beijing(DateTime.now()))}.json',
+                              type: FileType.custom,
+                              allowedExtensions: ['json'],
+                              bytes: bytes);
+                          if (file != null) {
+                            if (!c.android) {
+                              await File(file).writeAsBytes(bytes, flush: true);
+                            }
+                            c.message = '备份已导出。';
+                          }
+                        });
+                      },
+                      child: const Text('导出备份'))
+                ]));
+  }
+
+  Future<void> importData() async {
+    BackupPreview? preview;
+    await c.perform(() async {
+      final picked = await FilePicker.platform
+          .pickFiles(type: FileType.custom, allowedExtensions: ['json']);
+      if (picked == null || picked.files.single.path == null) return;
+      final file = File(picked.files.single.path!);
+      if (await file.length() > 50 * 1024 * 1024) {
+        throw const FormatException('备份超过 50 MB');
+      }
+      preview = previewBackup(await file.readAsString(), c.tasks, c.sessions);
+    });
+    if (preview == null || !mounted) return;
+    final data = preview!;
+    final importedTasks = <String>{}, excluded = <String>{};
+    final confirm = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => StatefulBuilder(
+            builder: (ctx, update) => AlertDialog(
+                    title: const Text('导入预览'),
+                    content: SizedBox(
+                        width: 500,
+                        child: SingleChildScrollView(
+                            child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                              Text(
+                                  '备份内 ${data.tasks.length} 个任务\n新增 ${data.sessions.length} 条记录，跳过 ${data.duplicateRecords} 条重复记录。'),
+                              if (data.conflicts.isNotEmpty)
+                                const Padding(
+                                    padding: EdgeInsets.only(top: 16),
+                                    child: Text('任务存在差异：默认保留本机版本，勾选则采用导入版本。')),
+                              ...data.conflicts.map((t) => CheckboxListTile(
+                                  value: importedTasks.contains(t.id),
+                                  title: Text(t.name),
+                                  subtitle: Text(
+                                      '采用导入版本：${t.category} · ${taskStatuses[t.status]}'),
+                                  onChanged: (v) => update(() {
+                                        v!
+                                            ? importedTasks.add(t.id)
+                                            : importedTasks.remove(t.id);
+                                      }))),
+                              if (data.overlapsExisting.isNotEmpty)
+                                const Padding(
+                                    padding: EdgeInsets.only(top: 16),
+                                    child: Text(
+                                        '以下新增记录与其他记录时间重叠。默认均保留并累计；如属于误记，勾选后排除该条统计。')),
+                              ...data.sessions
+                                  .where((s) =>
+                                      data.overlapsExisting.contains(s.id))
+                                  .map((s) => CheckboxListTile(
+                                      value: excluded.contains(s.id),
+                                      title: Text(s.taskName),
+                                      subtitle: Text(
+                                          '${dateText(beijing(s.started))} · ${minutes(s.milliseconds)} 分钟 · 排除统计'),
+                                      onChanged: (v) => update(() {
+                                            v!
+                                                ? excluded.add(s.id)
+                                                : excluded.remove(s.id);
+                                          }))),
+                            ]))),
+                    actions: [
+                      TextButton(
+                          onPressed: () => Navigator.pop(ctx, false),
+                          child: const Text('取消')),
+                      FilledButton(
+                          onPressed: () => Navigator.pop(ctx, true),
+                          child: const Text('确认合并'))
+                    ])));
+    if (confirm == true) {
+      await c.perform(() async {
+        await importBackup(c.store, data,
+            useImportedTaskIds: importedTasks, excludeSessionIds: excluded);
+        await c.refresh();
+        c.message = '合并完成，报告已更新。';
+      });
+    }
+  }
+}
+
+class HistoryPage extends StatefulWidget {
+  final AppController c;
+  const HistoryPage(this.c, {super.key});
+  @override
+  State<HistoryPage> createState() => _HistoryPageState();
+}
+
+class _HistoryPageState extends State<HistoryPage> {
+  String query = '', filter = 'all';
+  DateTimeRange? range;
+  @override
+  Widget build(BuildContext context) {
+    final records = widget.c.sessions
+        .where((s) =>
+            '${s.taskName} ${s.category}'
+                .toLowerCase()
+                .contains(query.toLowerCase()) &&
+            (filter == 'all' ||
+                (filter == 'complete'
+                    ? s.completed
+                    : filter == 'excluded'
+                        ? s.excluded
+                        : !s.completed)) &&
+            (range == null ||
+                (!beijing(s.started).isBefore(DateTime.utc(range!.start.year,
+                        range!.start.month, range!.start.day)) &&
+                    beijing(s.started).isBefore(DateTime.utc(range!.end.year,
+                        range!.end.month, range!.end.day + 1)))))
+        .toList();
+    return ListView(padding: const EdgeInsets.all(24), children: [
+      TextField(
+          decoration: const InputDecoration(
+              labelText: '搜索任务或科目', prefixIcon: Icon(Icons.search)),
+          onChanged: (v) => setState(() => query = v)),
+      const SizedBox(height: 12),
+      Wrap(spacing: 10, runSpacing: 8, children: [
+        for (final e in {
+          'all': '全部',
+          'complete': '完整完成',
+          'partial': '未完成',
+          'excluded': '已排除'
+        }.entries)
+          ChoiceChip(
+              label: Text(e.value),
+              selected: filter == e.key,
+              onSelected: (_) => setState(() => filter = e.key)),
+        ActionChip(
+            label: Text(range == null
+                ? '选择日期'
+                : '${dateText(range!.start)}–${dateText(range!.end)}'),
+            onPressed: () async {
+              final selected = await showDateRangePicker(
+                  context: context,
+                  firstDate: DateTime(2000),
+                  lastDate: DateTime(2100),
+                  initialDateRange: range);
+              if (selected != null) setState(() => range = selected);
+            }),
+        if (range != null)
+          ActionChip(
+              label: const Text('清除日期'),
+              onPressed: () => setState(() => range = null))
+      ]),
+      const SizedBox(height: 20),
+      Text(
+          '${records.length} 条记录 · 实际专注 ${minutes(records.where((s) => !s.excluded).fold(0, (n, s) => n + s.milliseconds))} 分钟'),
+      const SizedBox(height: 12),
+      if (records.isEmpty)
+        const Padding(
+            padding: EdgeInsets.all(40),
+            child: Text('这里还没有记录。开始一次专注，或导入另一台设备的备份。')),
+      ...records.map((s) => Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Card(
+              child: ListTile(
+                  leading: Icon(s.excluded
+                      ? Icons.visibility_off_outlined
+                      : s.completed
+                          ? Icons.check_circle_outline
+                          : Icons.timelapse),
+                  title: Text(s.taskName),
+                  subtitle: Text(
+                      '${dateText(beijing(s.started))} ${clockText((beijing(s.started).hour * 60 + beijing(s.started).minute) * 60000)}\n${s.category} · ${reasons[s.reason]}${s.excluded ? ' · 已排除统计' : ''}'),
+                  trailing: Text('${minutes(s.milliseconds)} 分钟'),
+                  isThreeLine: true,
+                  onTap: () => showDialog<void>(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                              title: Text(s.taskName),
+                              content: SingleChildScrollView(
+                                  child: SelectableText(
+                                      '科目：${s.category}\n开始：${beijing(s.started).toIso8601String().replaceAll('Z', '')} 北京时间\n结束：${beijing(s.ended).toIso8601String().replaceAll('Z', '')} 北京时间\n计划：${s.plannedSeconds ~/ 60} 分钟\n实际：${minutes(s.milliseconds)} 分钟\n暂停：${s.pauses.length} 次\n结束原因：${reasons[s.reason]}\n设备：${s.device}\n记录编号：${s.id}\n\n专注区间：\n${s.spans.map((x) => '${beijing(x.start).toIso8601String().replaceAll('Z', '')} → ${beijing(x.end).toIso8601String().replaceAll('Z', '')}').join('\n')}\n\n暂停区间：\n${s.pauses.map((x) => '${beijing(x.start).toIso8601String().replaceAll('Z', '')} → ${beijing(x.end).toIso8601String().replaceAll('Z', '')}').join('\n')}')),
+                              actions: [
+                                TextButton(
+                                    onPressed: () async {
+                                      Navigator.pop(ctx);
+                                      await widget.c.perform(() async {
+                                        await widget.c.store.session(
+                                            s.withExcluded(!s.excluded),
+                                            replace: true);
+                                        await widget.c.refresh();
+                                      });
+                                    },
+                                    child:
+                                        Text(s.excluded ? '恢复计入统计' : '排除统计')),
+                                FilledButton(
+                                    onPressed: () => Navigator.pop(ctx),
+                                    child: const Text('关闭'))
+                              ])))))),
+    ]);
+  }
+}
+
+class ReportsPage extends StatefulWidget {
+  final AppController c;
+  const ReportsPage(this.c, {super.key});
+  @override
+  State<ReportsPage> createState() => _ReportsPageState();
+}
+
+class _ReportsPageState extends State<ReportsPage> {
+  PeriodKind kind = PeriodKind.week;
+  DateTime selected = beijing(DateTime.now());
+  @override
+  Widget build(BuildContext context) {
+    final period = ReportPeriod(kind, selected),
+        report = buildReport(widget.c.sessions, ReportPeriod(kind, selected));
+    final previous = buildReport(widget.c.sessions, period.previous);
+    final open = period.isOpen(DateTime.now());
+    final goal = widget.c.settings.goals[kind.name];
+    final chart = <String, int>{};
+    for (var day = period.start;
+        day.isBefore(period.end);
+        day = day.add(const Duration(days: 1))) {
+      final key =
+          kind == PeriodKind.year ? '${day.month}月' : '${day.month}/${day.day}';
+      chart.update(key, (v) => v + (report.daily[dayKey(day)] ?? 0),
+          ifAbsent: () => report.daily[dayKey(day)] ?? 0);
+    }
+    Widget panel(String title, Widget child) => Padding(
+        padding: const EdgeInsets.only(bottom: 18),
+        child: Card(
+            child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(title,
+                          style: Theme.of(context).textTheme.titleMedium),
+                      const SizedBox(height: 18),
+                      child
+                    ]))));
+    Widget metric(String label, String value) => SizedBox(
+        width: MediaQuery.sizeOf(context).width < 650
+            ? (MediaQuery.sizeOf(context).width - 60) / 2
+            : 175,
+        child: Card(
+            child: Padding(
+                padding: const EdgeInsets.all(18),
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(label),
+                      const SizedBox(height: 8),
+                      Text(value, style: Theme.of(context).textTheme.titleLarge)
+                    ]))));
+    Widget breakdown(Map<String, int> values) {
+      final entries = values.entries.toList()
+        ..sort((a, b) => b.value.compareTo(a.value));
+      if (entries.isEmpty) return const Text('暂无数据');
+      return Column(
+          children: entries
+              .map((e) => Padding(
+                  padding: const EdgeInsets.only(bottom: 14),
+                  child: Column(children: [
+                    Row(children: [
+                      Expanded(child: Text(e.key)),
+                      Text('${minutes(e.value)} 分钟')
+                    ]),
+                    const SizedBox(height: 7),
+                    LinearProgressIndicator(
+                        value: report.milliseconds == 0
+                            ? 0
+                            : e.value / report.milliseconds,
+                        minHeight: 6,
+                        borderRadius: BorderRadius.circular(3))
+                  ])))
+              .toList());
+    }
+
+    return ListView(padding: const EdgeInsets.all(24), children: [
+      Align(
+          alignment: Alignment.centerLeft,
+          child: SegmentedButton<PeriodKind>(segments: const [
+            ButtonSegment(value: PeriodKind.week, label: Text('周报')),
+            ButtonSegment(value: PeriodKind.month, label: Text('月报')),
+            ButtonSegment(value: PeriodKind.year, label: Text('年报'))
+          ], selected: {
+            kind
+          }, onSelectionChanged: (v) => setState(() => kind = v.first))),
+      const SizedBox(height: 16),
+      Row(children: [
+        IconButton(
+            tooltip: '上一周期',
+            onPressed: () => setState(() => selected = period.previous.start),
+            icon: const Icon(Icons.chevron_left)),
+        Expanded(
+            child: TextButton(
+                onPressed: () async {
+                  final date = await showDatePicker(
+                      context: context,
+                      initialDate:
+                          DateTime(selected.year, selected.month, selected.day),
+                      firstDate: DateTime(2000),
+                      lastDate: DateTime.now());
+                  if (date != null) setState(() => selected = date);
+                },
+                child: Text(
+                    '${dateText(period.start)} – ${dateText(period.end.subtract(const Duration(days: 1)))}\n${open ? '进行中' : '完整周期'}'))),
+        IconButton(
+            tooltip: '下一周期',
+            onPressed: period.next.start.isAfter(beijing(DateTime.now()))
+                ? null
+                : () => setState(() => selected = period.next.start),
+            icon: const Icon(Icons.chevron_right)),
+        TextButton(
+            onPressed: () => setState(() => selected = beijing(DateTime.now())),
+            child: const Text('本期'))
+      ]),
+      const SizedBox(height: 16),
+      Wrap(spacing: 12, runSpacing: 12, children: [
+        metric('累计专注', '${minutes(report.milliseconds)} 分钟'),
+        metric('完整番茄', '${report.completed} 个'),
+        metric('未完成', '${report.interrupted} 次'),
+        metric(
+            '平均单次',
+            report.averageMinutes == null
+                ? '暂无数据'
+                : '${report.averageMinutes!.toStringAsFixed(1)} 分钟'),
+        metric(
+            '完成率',
+            report.completionRate == null
+                ? '暂无数据'
+                : '${(report.completionRate! * 100).toStringAsFixed(1)}%'),
+        metric('活跃天数', '${report.activeDays} 天'),
+        metric('最长连续专注', '${report.longestStreak} 天'),
+        metric(
+            '目标完成度',
+            goal == null
+                ? '未设置目标'
+                : '${(report.milliseconds / 60000 / goal * 100).toStringAsFixed(1)}%'),
+        metric(
+            '较上一完整周期',
+            open
+                ? '进行中'
+                : previous.milliseconds == 0
+                    ? '暂无基准'
+                    : '${((report.milliseconds / previous.milliseconds - 1) * 100).toStringAsFixed(1)}%'),
+      ]),
+      const SizedBox(height: 20),
+      panel(kind == PeriodKind.year ? '每月专注趋势（分钟）' : '每日专注趋势（分钟）',
+          BarChart(chart)),
+      if (kind == PeriodKind.month)
+        panel('每周投入（以周一日期标识，仅累计本月部分）', BarChart(report.weekly)),
+      if (kind == PeriodKind.year) panel('全年专注热力图', Heatmap(report)),
+      panel('科目 / 项目分布', breakdown(report.category)),
+      panel('任务投入', breakdown(report.tasks)),
+      panel('北京时间时段分布（分钟）',
+          BarChart({for (var h = 0; h < 24; h++) '$h时': report.hourly[h]})),
+      panel(
+          '基于记录的观察',
+          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            for (final advice in report.advice)
+              Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Text(advice)),
+            const Text(
+                '计时反映投入时间，不直接衡量学习效果。跨日记录按时间区间分配时长；完成数归入结束日期；平均单次按本期有投入的记录计算，只累计本期部分。')
+          ])),
+    ]);
+  }
+}
+
+class BarChart extends StatelessWidget {
+  final Map<String, int> values;
+  const BarChart(this.values, {super.key});
+  @override
+  Widget build(BuildContext context) {
+    if (values.isEmpty) return const Text('暂无数据');
+    final maxMs = math.max(60000, values.values.fold<int>(0, math.max));
+    return SizedBox(
+        height: 200,
+        child: LayoutBuilder(builder: (_, constraints) {
+          final width = math.max(constraints.maxWidth, values.length * 38.0);
+          return SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: SizedBox(
+                  width: width,
+                  child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: values.entries
+                          .map((e) => Expanded(
+                              child: Tooltip(
+                                  message: '${e.key}：${minutes(e.value)} 分钟',
+                                  child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 3),
+                                      child: Column(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.end,
+                                          children: [
+                                            if (values.length <= 12)
+                                              Text(minutes(e.value),
+                                                  style: const TextStyle(
+                                                      fontSize: 10)),
+                                            const SizedBox(height: 4),
+                                            Container(
+                                                height: math.max(
+                                                    2, e.value / maxMs * 145),
+                                                decoration: BoxDecoration(
+                                                    color: e.value == 0
+                                                        ? Theme.of(context)
+                                                            .colorScheme
+                                                            .surfaceContainerHighest
+                                                        : Theme.of(context)
+                                                            .colorScheme
+                                                            .primary
+                                                            .withValues(
+                                                                alpha: .75),
+                                                    borderRadius:
+                                                        const BorderRadius
+                                                            .vertical(
+                                                            top:
+                                                                Radius.circular(
+                                                                    4)))),
+                                            const SizedBox(height: 8),
+                                            SizedBox(
+                                                height: 28,
+                                                child: Text(e.key,
+                                                    style: const TextStyle(
+                                                        fontSize: 10),
+                                                    maxLines: 2)),
+                                          ])))))
+                          .toList())));
+        }));
+  }
+}
+
+class Heatmap extends StatelessWidget {
+  final Report report;
+  const Heatmap(this.report, {super.key});
+  @override
+  Widget build(BuildContext context) {
+    final first = report.period.start;
+    final gridStart = first.subtract(Duration(days: first.weekday - 1));
+    final weeks = (report.period.end.difference(gridStart).inDays / 7).ceil();
+    final maxMs = math.max(1, report.daily.values.fold<int>(0, math.max));
+    return SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Column(children: [
+            for (final d in ['一', '二', '三', '四', '五', '六', '日'])
+              SizedBox(
+                  width: 20,
+                  height: 17,
+                  child: Text(d, style: const TextStyle(fontSize: 10)))
+          ]),
+          for (var w = 0; w < weeks; w++)
+            Column(children: [
+              for (var d = 0; d < 7; d++)
+                Builder(builder: (context) {
+                  final date = gridStart.add(Duration(days: w * 7 + d));
+                  final value = report.daily[dayKey(date)] ?? 0;
+                  final within =
+                      !date.isBefore(first) && date.isBefore(report.period.end);
+                  return Tooltip(
+                      message:
+                          within ? '${dayKey(date)}：${minutes(value)} 分钟' : '',
+                      child: Container(
+                          width: 14,
+                          height: 14,
+                          margin: const EdgeInsets.all(1.5),
+                          decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(2),
+                              color: !within
+                                  ? Colors.transparent
+                                  : value == 0
+                                      ? Theme.of(context)
+                                          .colorScheme
+                                          .surfaceContainerHighest
+                                      : Theme.of(context)
+                                          .colorScheme
+                                          .primary
+                                          .withValues(
+                                              alpha:
+                                                  .25 + .75 * value / maxMs))));
+                })
+            ]),
+        ]));
+  }
+}

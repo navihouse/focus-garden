@@ -1,0 +1,32 @@
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+val newBuildDir: Directory =
+    rootProject.layout.buildDirectory
+        .dir("../../build")
+        .get()
+rootProject.layout.buildDirectory.value(newBuildDir)
+
+subprojects {
+    // Legacy plugins declare their own build-tool versions. Keep their classpaths
+    // aligned with settings.gradle.kts rather than loading multiple toolchains.
+    buildscript.configurations.configureEach {
+        resolutionStrategy.force(
+            "com.android.tools.build:gradle:9.1.0",
+            "org.jetbrains.kotlin:kotlin-gradle-plugin:2.4.0"
+        )
+    }
+    val newSubprojectBuildDir: Directory = newBuildDir.dir(project.name)
+    project.layout.buildDirectory.value(newSubprojectBuildDir)
+}
+subprojects {
+    project.evaluationDependsOn(":app")
+}
+
+tasks.register<Delete>("clean") {
+    delete(rootProject.layout.buildDirectory)
+}
