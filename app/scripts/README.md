@@ -16,3 +16,5 @@ flutter build windows --release --target lib/main.dart
 Android：创建自己的签名密钥，在 `android/key.properties` 中配置 `storeFile`、`storePassword`、`keyAlias`、`keyPassword` 后运行 `flutter build apk --release --target lib/main.dart`。当前设备的私人签名密钥在上级 `work/signing/`，不包含在源码包内。已有用户更新必须继续使用原密钥。
 
 `lib/smoke_main.dart` 与 `test_support/native_probe.dart` 是隔离数据目录下的原生验证入口。生产构建始终使用 `lib/main.dart`。`package-release.py` 仅归档现有产物，运行前须确认它们来自生产入口。
+
+`test_support/desktop_integration_probe.dart` 配合 `verify-desktop-integration.py <probe.exe> <空结果目录>` 验证真实 Windows 自启动注册、物理程序路径、隐藏启动、托盘恢复和退出。脚本会暂时改写当前用户的 FocusGarden 自启动项，并在 finally 中恢复原值；不操作已有应用窗口或个人数据库。验证完成后必须重新构建生产入口，再打包。

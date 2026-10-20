@@ -13,6 +13,7 @@ import 'data/backup.dart';
 import 'domain/models.dart';
 import 'domain/reports.dart';
 import 'domain/timer_engine.dart';
+import 'task_editor.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -494,7 +495,9 @@ class _HomeState extends State<Home> {
                       title: Text(t.name),
                       subtitle: Text(
                           '${t.category.isEmpty ? '未分类' : t.category} · ${taskStatuses[t.status]}\n'
-                          '完成 ${records.where((s) => s.completed).length} / ${t.estimate} 个番茄 · ${minutes(records.fold(0, (n, s) => n + s.milliseconds))} 分钟${t.due == null ? '' : '\n截止 ${dateText(t.due!)}'}'),
+                          '完成 ${records.where((s) => s.completed).length} / ${t.estimate} 个番茄 · ${minutes(records.fold(0, (n, s) => n + s.milliseconds))} 分钟${t.due == null ? '' : '\n截止 ${dateText(t.due!)}'}${t.subtasks.isEmpty ? '' : '\n子任务 ${t.subtasks.where((s) => s.completed).length}/${t.subtasks.length} 完成'}${t.notes.isEmpty ? '' : '\n备注：${t.notes.replaceAll('\n', ' ')}'}',
+                          maxLines: 5,
+                          overflow: TextOverflow.ellipsis),
                       isThreeLine: true,
                       onTap: () => editTask(t),
                       trailing: PopupMenuButton<String>(
@@ -514,118 +517,14 @@ class _HomeState extends State<Home> {
         }),
       ]);
   Future<void> editTask([TaskItem? task]) async {
-    final form = GlobalKey<FormState>();
-    final name = TextEditingController(text: task?.name),
-        category = TextEditingController(text: task?.category),
-        estimate = TextEditingController(text: '${task?.estimate ?? 1}');
-    DateTime? due = task?.due;
-    String status = task?.status ?? 'todo';
-    final saved = await showDialog<bool>(
-        context: context,
-        builder: (dialogContext) => StatefulBuilder(
-            builder: (ctx, update) => AlertDialog(
-                    title: Text(task == null ? '新建任务' : '编辑任务'),
-                    content: SizedBox(
-                        width: 430,
-                        child: SingleChildScrollView(
-                            child: Form(
-                                key: form,
-                                child: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      TextFormField(
-                                          controller: name,
-                                          maxLength: 200,
-                                          decoration: const InputDecoration(
-                                              labelText: '任务名称'),
-                                          validator: (v) => v!.trim().isEmpty
-                                              ? '请填写任务名称'
-                                              : null),
-                                      const SizedBox(height: 12),
-                                      TextFormField(
-                                          controller: category,
-                                          maxLength: 100,
-                                          decoration: const InputDecoration(
-                                              labelText: '科目或项目')),
-                                      const SizedBox(height: 12),
-                                      TextFormField(
-                                          controller: estimate,
-                                          keyboardType: TextInputType.number,
-                                          decoration: const InputDecoration(
-                                              labelText: '预计番茄数'),
-                                          validator: (v) =>
-                                              (int.tryParse(v ?? '') ?? 0) <
-                                                          1 ||
-                                                      (int.tryParse(v ?? '') ??
-                                                              0) >
-                                                          999
-                                                  ? '填写 1–999'
-                                                  : null),
-                                      const SizedBox(height: 16),
-                                      DropdownButtonFormField<String>(
-                                          initialValue: status,
-                                          decoration: const InputDecoration(
-                                              labelText: '状态'),
-                                          items: taskStatuses.entries
-                                              .map((e) => DropdownMenuItem(
-                                                  value: e.key,
-                                                  child: Text(e.value)))
-                                              .toList(),
-                                          onChanged: (v) => status = v!),
-                                      const SizedBox(height: 8),
-                                      Row(children: [
-                                        Expanded(
-                                            child: Text(due == null
-                                                ? '不设截止日期'
-                                                : dateText(due!))),
-                                        TextButton(
-                                            onPressed: () async {
-                                              final selected =
-                                                  await showDatePicker(
-                                                      context: ctx,
-                                                      initialDate:
-                                                          due ?? DateTime.now(),
-                                                      firstDate: DateTime(2000),
-                                                      lastDate: DateTime(2100));
-                                              if (selected != null) {
-                                                update(() => due = selected);
-                                              }
-                                            },
-                                            child: const Text('选择日期')),
-                                        IconButton(
-                                            onPressed: () =>
-                                                update(() => due = null),
-                                            icon: const Icon(Icons.clear))
-                                      ]),
-                                    ])))),
-                    actions: [
-                      TextButton(
-                          onPressed: () => Navigator.pop(ctx, false),
-                          child: const Text('取消')),
-                      FilledButton(
-                          onPressed: () {
-                            if (form.currentState!.validate()) {
-                              Navigator.pop(ctx, true);
-                            }
-                          },
-                          child: const Text('保存'))
-                    ])));
-    if (saved == true) {
+    final saved = await showDialog<TaskItem>(
+        context: context, builder: (_) => TaskEditor(task: task));
+    if (saved != null) {
       await c.perform(() async {
-        await c.store.task(TaskItem(
-            id: task?.id ?? AppController.uuid.v4(),
-            name: name.text.trim(),
-            category: category.text.trim(),
-            status: status,
-            estimate: int.parse(estimate.text),
-            due: due,
-            modified: DateTime.now().toUtc()));
+        await c.store.task(saved);
         await c.refresh();
       });
     }
-    name.dispose();
-    category.dispose();
-    estimate.dispose();
   }
 
   Widget musicPage() => ListView(padding: const EdgeInsets.all(24), children: [
@@ -711,33 +610,37 @@ class _HomeState extends State<Home> {
             text: c.settings.goals[kind.name]?.toString() ?? '')
     };
     String theme = c.settings.theme;
-    final result = await showDialog<bool>(
+    bool launchAtLogin = c.startupEnabled;
+    final route = DialogRoute<bool>(
         context: context,
-        builder: (ctx) => AlertDialog(
-                title: const Text('专注设置'),
-                content: SizedBox(
-                    width: 430,
-                    child: SingleChildScrollView(
-                        child: Form(
-                            key: form,
-                            child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  for (final pair in [
-                                    (focus, '专注分钟'),
-                                    (short, '短休息分钟'),
-                                    (long, '长休息分钟')
-                                  ])
-                                    Padding(
-                                        padding:
-                                            const EdgeInsets.only(bottom: 14),
-                                        child: TextFormField(
-                                            controller: pair.$1,
-                                            keyboardType: TextInputType.number,
-                                            decoration: InputDecoration(
-                                                labelText: pair.$2),
-                                            validator: (v) =>
-                                                (int.tryParse(v ?? '') ?? 0) <
+        builder: (ctx) => StatefulBuilder(
+            builder: (ctx, update) => AlertDialog(
+                    title: const Text('专注设置'),
+                    content: SizedBox(
+                        width: 430,
+                        child: SingleChildScrollView(
+                            child: Form(
+                                key: form,
+                                child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      for (final pair in [
+                                        (focus, '专注分钟'),
+                                        (short, '短休息分钟'),
+                                        (long, '长休息分钟')
+                                      ])
+                                        Padding(
+                                            padding: const EdgeInsets.only(
+                                                bottom: 14),
+                                            child: TextFormField(
+                                                controller: pair.$1,
+                                                keyboardType:
+                                                    TextInputType.number,
+                                                decoration: InputDecoration(
+                                                    labelText: pair.$2),
+                                                validator: (v) => (int.tryParse(
+                                                                    v ?? '') ??
+                                                                0) <
                                                             1 ||
                                                         (int.tryParse(
                                                                     v ?? '') ??
@@ -745,69 +648,117 @@ class _HomeState extends State<Home> {
                                                             180
                                                     ? '填写 1–180'
                                                     : null)),
-                                  DropdownButtonFormField<String>(
-                                      initialValue: theme,
-                                      decoration: const InputDecoration(
-                                          labelText: '主题'),
-                                      items: const [
-                                        DropdownMenuItem(
-                                            value: 'system',
-                                            child: Text('跟随系统')),
-                                        DropdownMenuItem(
-                                            value: 'light', child: Text('浅色')),
-                                        DropdownMenuItem(
-                                            value: 'dark', child: Text('深色'))
+                                      DropdownButtonFormField<String>(
+                                          initialValue: theme,
+                                          decoration: const InputDecoration(
+                                              labelText: '主题'),
+                                          items: const [
+                                            DropdownMenuItem(
+                                                value: 'system',
+                                                child: Text('跟随系统')),
+                                            DropdownMenuItem(
+                                                value: 'light',
+                                                child: Text('浅色')),
+                                            DropdownMenuItem(
+                                                value: 'dark',
+                                                child: Text('深色'))
+                                          ],
+                                          onChanged: (v) => theme = v!),
+                                      if (Platform.isWindows) ...[
+                                        const SizedBox(height: 20),
+                                        const Divider(),
+                                        SwitchListTile.adaptive(
+                                            key: const ValueKey(
+                                                'launch-at-login'),
+                                            contentPadding: EdgeInsets.zero,
+                                            title: const Text('开机自启动'),
+                                            subtitle: const Text(
+                                                '保存后生效。登录 Windows 后进入托盘，不自动计时或播放。'),
+                                            value: launchAtLogin,
+                                            onChanged:
+                                                c.desktopIntegrationAvailable
+                                                    ? (v) => update(
+                                                        () => launchAtLogin = v)
+                                                    : null),
+                                        if (launchAtLogin &&
+                                            !c.startupCurrentPath)
+                                          const Text(
+                                              '保存时会使用当前程序位置，请保留解压后的完整文件夹。'),
+                                        TextButton.icon(
+                                            onPressed: () async {
+                                              await c.perform(
+                                                  c.createStartMenuShortcut);
+                                              if (ctx.mounted) update(() {});
+                                            },
+                                            icon: const Icon(Icons.apps),
+                                            label: const Text('添加 / 修复开始菜单入口')),
+                                        const Text(
+                                            '按 Win 键搜索 FocusGarden 或专注花园即可打开。移动程序后可在这里修复入口。'),
                                       ],
-                                      onChanged: (v) => theme = v!),
-                                  const SizedBox(height: 20),
-                                  const Text('可选目标：填写每个周期的专注分钟数；留空则不设目标。'),
-                                  for (final entry in goals.entries)
-                                    Padding(
-                                        padding: const EdgeInsets.only(top: 14),
-                                        child: TextFormField(
-                                            controller: entry.value,
-                                            keyboardType: TextInputType.number,
-                                            decoration: InputDecoration(
-                                                labelText: '${{
-                                              'week': '每周',
-                                              'month': '每月',
-                                              'year': '每年'
-                                            }[entry.key]}目标（分钟）'),
-                                            validator: (v) => v!.isEmpty ||
-                                                    ((int.tryParse(v) ?? 0) >
-                                                            0 &&
-                                                        (int.tryParse(v) ??
-                                                                0) <=
-                                                            525600)
-                                                ? null
-                                                : '填写正整数，或留空')),
-                                  const SizedBox(height: 14),
-                                  const Text(
-                                      '统计时区固定为北京时间（UTC+8），每周从周一开始。修改时长从下一次计时生效。'),
-                                ])))),
-                actions: [
-                  TextButton(
-                      onPressed: () => Navigator.pop(ctx, false),
-                      child: const Text('取消')),
-                  FilledButton(
-                      onPressed: () {
-                        if (form.currentState!.validate()) {
-                          Navigator.pop(ctx, true);
-                        }
-                      },
-                      child: const Text('保存'))
-                ]));
+                                      const SizedBox(height: 20),
+                                      const Text('可选目标：填写每个周期的专注分钟数；留空则不设目标。'),
+                                      for (final entry in goals.entries)
+                                        Padding(
+                                            padding:
+                                                const EdgeInsets.only(top: 14),
+                                            child: TextFormField(
+                                                controller: entry.value,
+                                                keyboardType:
+                                                    TextInputType.number,
+                                                decoration: InputDecoration(
+                                                    labelText: '${{
+                                                  'week': '每周',
+                                                  'month': '每月',
+                                                  'year': '每年'
+                                                }[entry.key]}目标（分钟）'),
+                                                validator: (v) => v!.isEmpty ||
+                                                        ((int.tryParse(v) ??
+                                                                    0) >
+                                                                0 &&
+                                                            (int.tryParse(v) ??
+                                                                    0) <=
+                                                                525600)
+                                                    ? null
+                                                    : '填写正整数，或留空')),
+                                      const SizedBox(height: 14),
+                                      const Text(
+                                          '统计时区固定为北京时间（UTC+8），每周从周一开始。修改时长从下一次计时生效。'),
+                                    ])))),
+                    actions: [
+                      TextButton(
+                          onPressed: () => Navigator.pop(ctx, false),
+                          child: const Text('取消')),
+                      FilledButton(
+                          onPressed: () {
+                            if (form.currentState!.validate()) {
+                              Navigator.pop(ctx, true);
+                            }
+                          },
+                          child: const Text('保存'))
+                    ])));
+    final result = await Navigator.of(context, rootNavigator: true).push(route);
     if (result == true) {
-      await c.perform(() => c.saveSettings(Settings(
-              focus: int.parse(focus.text),
-              shortBreak: int.parse(short.text),
-              longBreak: int.parse(long.text),
-              theme: theme,
-              goals: {
-                for (final e in goals.entries)
-                  if (e.value.text.isNotEmpty) e.key: int.parse(e.value.text)
-              })));
+      await c.perform(() async {
+        await c.saveSettings(Settings(
+            focus: int.parse(focus.text),
+            shortBreak: int.parse(short.text),
+            longBreak: int.parse(long.text),
+            theme: theme,
+            goals: {
+              for (final e in goals.entries)
+                if (e.value.text.isNotEmpty) e.key: int.parse(e.value.text)
+            }));
+        if (Platform.isWindows &&
+            c.desktopIntegrationAvailable &&
+            (launchAtLogin != c.startupEnabled ||
+                (launchAtLogin && !c.startupCurrentPath))) {
+          await c.setLaunchAtLogin(launchAtLogin);
+        }
+      });
     }
+    // Popping completes push() before the closing animation removes the form.
+    // Keep controllers alive until the route has actually left the overlay.
+    await route.completed;
     for (final field in [focus, short, long, ...goals.values]) {
       field.dispose();
     }

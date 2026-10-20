@@ -91,6 +91,31 @@ void main() {
         await tester.tap(find.text(page).last);
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);
+        if (page == '任务') {
+          await tester.tap(find.text('学习数学'));
+          await tester.pumpAndSettle();
+          await tester.enterText(
+              find.byKey(const ValueKey('new-subtask')), '复习PPT');
+          await tester.tap(find.byTooltip('添加子任务'));
+          await tester.pump();
+          await tester.enterText(
+              find.byKey(const ValueKey('new-subtask')), '整理笔记');
+          await tester.tap(find.byTooltip('添加子任务'));
+          await tester.pump();
+          await tester.tap(find.byType(Checkbox).first);
+          await tester.ensureVisible(find.byKey(const ValueKey('task-notes')));
+          await tester.enterText(
+              find.byKey(const ValueKey('task-notes')), '先复习概念\n再完成课后练习');
+          await tester.pumpAndSettle();
+          await screenshot('task-details');
+          await tester.tap(find.text('保存'));
+          await tester.pumpAndSettle();
+          expect(c.tasks.single.subtasks.length, 2);
+          expect(c.tasks.single.subtasks.first.completed, true);
+          expect(c.tasks.single.notes, '先复习概念\n再完成课后练习');
+          expect((await c.store.tasks()).single.subtasks.last.name, '整理笔记');
+          expect(tester.takeException(), isNull);
+        }
       }
       await screenshot('reports');
       await tester.tap(find.text('年报'));

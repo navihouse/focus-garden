@@ -27,6 +27,10 @@ class AppController extends ChangeNotifier {
   Timer? _ticker;
   int _lastSave = 0, completedCycle = 0;
   bool _busy = false, muted = false, playing = false, shuffle = false;
+  bool desktopIntegrationAvailable = false,
+      startupEnabled = false,
+      startupCurrentPath = false,
+      startMenuAvailable = false;
   String repeat = 'all';
   double volume = .6;
   int trackIndex = 0;
@@ -118,6 +122,17 @@ class AppController extends ChangeNotifier {
           await perform(() => end(reason: 'sleep', useCheckpoint: true));
         }
       });
+      if (Platform.isWindows) {
+        try {
+          // Isolated validation runs must not install a test shortcut.
+          if (directory == null) {
+            await native.invokeMethod('createStartMenuShortcut');
+          }
+          await refreshDesktopIntegration();
+        } catch (e) {
+          message = 'Windows 启动设置未完成，可在设置中重试：$e';
+        }
+      }
     }
     _ticker = Timer.periodic(const Duration(milliseconds: 500), (_) {
       if (_busy) return;
@@ -148,6 +163,27 @@ class AppController extends ChangeNotifier {
     sessions = await store.sessions();
     sessions.sort((a, b) => b.started.compareTo(a.started));
     notifyListeners();
+  }
+
+  Future<void> refreshDesktopIntegration() async {
+    if (!Platform.isWindows) return;
+    final state = asJson(await native.invokeMethod('getDesktopIntegration'));
+    startupEnabled = state['startupEnabled'] == true;
+    startupCurrentPath = state['startupCurrentPath'] == true;
+    startMenuAvailable = state['shortcutCurrentPath'] == true;
+    desktopIntegrationAvailable = true;
+    notifyListeners();
+  }
+
+  Future<void> setLaunchAtLogin(bool enabled) async {
+    await native.invokeMethod('setLaunchAtLogin', {'enabled': enabled});
+    await refreshDesktopIntegration();
+  }
+
+  Future<void> createStartMenuShortcut() async {
+    await native.invokeMethod('createStartMenuShortcut');
+    await refreshDesktopIntegration();
+    message = '开始菜单入口已添加，可按 Win 键搜索 FocusGarden 或专注花园。';
   }
 
   Future<void> pollAndroid() async {

@@ -1,4 +1,5 @@
 #include "flutter_window.h"
+#include "desktop_integration.h"
 
 #include <optional>
 #include <shellapi.h>
@@ -6,8 +7,8 @@
 
 #include "flutter/generated_plugin_registrant.h"
 
-FlutterWindow::FlutterWindow(const flutter::DartProject& project)
-    : project_(project) {}
+FlutterWindow::FlutterWindow(const flutter::DartProject& project, bool start_hidden)
+    : project_(project), start_hidden_(start_hidden) {}
 
 FlutterWindow::~FlutterWindow() {
   // Detach platform handlers while their messenger and native view still exist.
@@ -34,7 +35,29 @@ bool FlutterWindow::OnCreate() {
       flutter_controller_->engine()->messenger(), "focus_garden/native",
       &flutter::StandardMethodCodec::GetInstance());
   focus_channel_->SetMethodCallHandler([this](const auto& call, auto result) {
-    if (call.method_name() == "takeSuspend") {
+    if (call.method_name() == "getDesktopIntegration") {
+      DesktopIntegrationState state;
+      std::string error;
+      if (!ReadDesktopIntegration(&state, &error)) { result->Error("DESKTOP_INTEGRATION", error); return; }
+      result->Success(flutter::EncodableValue(flutter::EncodableMap{
+          {flutter::EncodableValue("startupEnabled"), flutter::EncodableValue(state.startup_enabled)},
+          {flutter::EncodableValue("startupCurrentPath"), flutter::EncodableValue(state.startup_current_path)},
+          {flutter::EncodableValue("shortcutExists"), flutter::EncodableValue(state.shortcut_exists)},
+          {flutter::EncodableValue("shortcutCurrentPath"), flutter::EncodableValue(state.shortcut_current_path)}}));
+    } else if (call.method_name() == "setLaunchAtLogin") {
+      const auto* map = std::get_if<flutter::EncodableMap>(call.arguments());
+      if (!map) { result->Error("INVALID_ARGUMENT", "Missing enabled flag"); return; }
+      const auto it = map->find(flutter::EncodableValue("enabled"));
+      const bool* enabled = it == map->end() ? nullptr : std::get_if<bool>(&it->second);
+      if (!enabled) { result->Error("INVALID_ARGUMENT", "Missing enabled flag"); return; }
+      std::string error;
+      if (SetLaunchAtLogin(*enabled, &error)) result->Success();
+      else result->Error("DESKTOP_INTEGRATION", error);
+    } else if (call.method_name() == "createStartMenuShortcut") {
+      std::string error;
+      if (CreateStartMenuShortcut(&error)) result->Success();
+      else result->Error("DESKTOP_INTEGRATION", error);
+    } else if (call.method_name() == "takeSuspend") {
       result->Success(flutter::EncodableValue(suspend_pending_));
       suspend_pending_ = false;
     } else if (call.method_name() == "notify") {
@@ -63,7 +86,7 @@ bool FlutterWindow::OnCreate() {
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
-    this->Show();
+    if (!start_hidden_) this->Show();
   });
 
   // Flutter can complete the first frame before the "show window" callback is

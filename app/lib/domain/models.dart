@@ -5,11 +5,32 @@ typedef Json = Map<String, dynamic>;
 DateTime utc(String value) => DateTime.parse(value).toUtc();
 Json asJson(Object? value) => Map<String, dynamic>.from(value as Map);
 
+class SubtaskItem {
+  final String id, name;
+  final bool completed;
+  const SubtaskItem(
+      {required this.id, required this.name, this.completed = false});
+  Json toJson() => {'id': id, 'name': name, 'completed': completed};
+  factory SubtaskItem.fromJson(Json j) {
+    if (j['id'] is! String ||
+        j['name'] is! String ||
+        j['completed'] is! bool ||
+        (j['id'] as String).isEmpty ||
+        (j['name'] as String).trim().isEmpty ||
+        (j['name'] as String).length > 200) {
+      throw const FormatException('子任务字段无效');
+    }
+    return SubtaskItem(id: j['id'], name: j['name'], completed: j['completed']);
+  }
+}
+
 class TaskItem {
   final String id, name, category, status;
   final int estimate;
   final DateTime? due;
   final DateTime modified;
+  final String notes;
+  final List<SubtaskItem> subtasks;
   const TaskItem(
       {required this.id,
       required this.name,
@@ -17,6 +38,8 @@ class TaskItem {
       this.status = 'todo',
       this.estimate = 1,
       this.due,
+      this.notes = '',
+      this.subtasks = const [],
       required this.modified});
   Json toJson() => {
         'id': id,
@@ -24,24 +47,37 @@ class TaskItem {
         'category': category,
         'status': status,
         'estimate': estimate,
+        'notes': notes,
+        'subtasks': subtasks.map((s) => s.toJson()).toList(),
         'due': due == null
             ? null
             : '${due!.year}-${due!.month.toString().padLeft(2, '0')}-${due!.day.toString().padLeft(2, '0')}',
         'modified': modified.toIso8601String()
       };
   factory TaskItem.fromJson(Json j) {
+    if ((j['notes'] != null && j['notes'] is! String) ||
+        (j['subtasks'] != null && j['subtasks'] is! List)) {
+      throw const FormatException('任务备注或子任务格式无效');
+    }
     final t = TaskItem(
         id: j['id'] as String,
         name: j['name'] as String,
         category: j['category'] as String,
         status: j['status'] as String,
         estimate: j['estimate'] as int,
+        notes: j['notes'] as String? ?? '',
+        subtasks: ((j['subtasks'] as List?) ?? [])
+            .map((s) => SubtaskItem.fromJson(asJson(s)))
+            .toList(),
         due: j['due'] == null ? null : DateTime.parse(j['due'] as String),
         modified: utc(j['modified'] as String));
     if (t.id.isEmpty ||
         t.name.trim().isEmpty ||
         t.name.length > 200 ||
         t.category.length > 100 ||
+        t.notes.length > 10000 ||
+        t.subtasks.length > 200 ||
+        t.subtasks.map((s) => s.id).toSet().length != t.subtasks.length ||
         t.estimate < 1 ||
         t.estimate > 999 ||
         !['todo', 'doing', 'done'].contains(t.status)) {

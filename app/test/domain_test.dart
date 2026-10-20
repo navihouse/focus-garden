@@ -30,6 +30,92 @@ void main() {
   setUpAll(() {
     driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
   });
+  test('legacy task JSON loads without notes or subtasks', () {
+    final legacy = task('old').toJson()
+      ..remove('notes')
+      ..remove('subtasks');
+    final parsed = TaskItem.fromJson(legacy);
+    expect(parsed.notes, '');
+    expect(parsed.subtasks, isEmpty);
+  });
+  test(
+      'task notes and ordered completion state survive JSON and status changes',
+      () {
+    final t = TaskItem(
+        id: 'steps',
+        name: '大学物理',
+        modified: DateTime.utc(2026),
+        notes: '先复习概念\n再整理错题',
+        subtasks: const [
+          SubtaskItem(id: 'ppt', name: '复习PPT', completed: true),
+          SubtaskItem(id: 'notes', name: '整理笔记'),
+        ]);
+    final parsed = TaskItem.fromJson({...t.toJson(), 'status': 'doing'});
+    expect(parsed.notes, t.notes);
+    expect(parsed.subtasks.map((s) => s.name), ['复习PPT', '整理笔记']);
+    expect(parsed.subtasks.map((s) => s.completed), [true, false]);
+    expect(parsed.status, 'doing');
+    expect(parsed.sameAs(t), false);
+  });
+  test('malformed or duplicate subtasks and excessive notes are rejected', () {
+    final original = task('invalid').toJson();
+    expect(() => TaskItem.fromJson({...original, 'subtasks': 'bad'}),
+        throwsFormatException);
+    expect(() => TaskItem.fromJson({...original, 'notes': 'x' * 10001}),
+        throwsFormatException);
+    expect(
+        () => TaskItem.fromJson({
+              ...original,
+              'subtasks': [
+                {'id': 'same', 'name': 'one', 'completed': false},
+                {'id': 'same', 'name': 'two', 'completed': true}
+              ]
+            }),
+        throwsFormatException);
+    expect(
+        () =>
+            SubtaskItem.fromJson({'id': 'x', 'name': ' ', 'completed': false}),
+        throwsFormatException);
+  });
+  test(
+      'v2 backups preserve notes and subtasks while v1 backups remain importable',
+      () async {
+    final db = LocalStore.testing(NativeDatabase.memory());
+    addTearDown(db.close);
+    final rich = TaskItem(
+        id: 'rich',
+        name: '大学物理',
+        notes: '周末前完成',
+        subtasks: const [
+          SubtaskItem(id: 'homework', name: '完成作业', completed: true)
+        ],
+        modified: DateTime.utc(2026));
+    final payload = exportBackup([rich], []);
+    expect(jsonDecode(payload)['version'], 2);
+    await importBackup(db, previewBackup(payload, [], []));
+    final reopened = (await db.tasks()).single;
+    expect(reopened.notes, rich.notes);
+    expect(reopened.subtasks.single.completed, true);
+    final legacy = asJson(jsonDecode(exportBackup([task('legacy')], [])));
+    legacy['version'] = 1;
+    (legacy['tasks'] as List).single
+      ..remove('notes')
+      ..remove('subtasks');
+    final preview = previewBackup(jsonEncode(legacy), [], []);
+    expect(preview.tasks.single.notes, '');
+    expect(preview.tasks.single.subtasks, isEmpty);
+    final conflicting = previewBackup(
+        exportBackup([
+          TaskItem.fromJson({...rich.toJson(), 'notes': '导入备注'})
+        ], []),
+        [rich],
+        []);
+    expect(conflicting.conflicts.single.id, 'rich');
+    await importBackup(db, conflicting);
+    expect((await db.tasks()).single.notes, '周末前完成');
+    await importBackup(db, conflicting, useImportedTaskIds: {'rich'});
+    expect((await db.tasks()).single.notes, '导入备注');
+  });
   test('task due dates preserve the same civil day after roundtrip', () {
     final t = TaskItem(
         id: 'due',
