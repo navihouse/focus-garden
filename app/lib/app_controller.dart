@@ -14,6 +14,15 @@ import 'domain/timer_engine.dart';
 class AppController extends ChangeNotifier {
   static const native = MethodChannel('focus_garden/native');
   static const uuid = Uuid();
+  static Future<bool> playCompletionSound() async {
+    try {
+      await native.invokeMethod('taskCompleted');
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   late LocalStore store;
   late Directory dataDirectory;
   List<TaskItem> tasks = [];
@@ -208,13 +217,9 @@ class AppController extends ChangeNotifier {
     }));
     if (done && selectedTask == id && !active) selectedTask = null;
     await refresh();
-    if (done) {
-      try {
-        await native.invokeMethod('taskCompleted');
-      } catch (_) {
-        // Audio failure must not undo the saved task or stop a focus timer.
-        message = '任务已完成，提示音暂时无法播放。';
-      }
+    if (done && !await playCompletionSound()) {
+      // Audio failure must not undo the saved task or stop a focus timer.
+      message = '任务已完成，提示音暂时无法播放。';
     }
   }
 

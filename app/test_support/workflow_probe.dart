@@ -9,7 +9,8 @@ import 'package:window_manager/window_manager.dart';
 import 'package:focus_garden/app_controller.dart';
 import 'package:focus_garden/domain/models.dart';
 import 'package:focus_garden/domain/timer_engine.dart';
-import 'package:focus_garden/main.dart' show FocusApp;
+import 'package:focus_garden/main.dart' show FocusApp, Home;
+import 'package:focus_garden/task_editor.dart';
 
 Future<void> main() async {
   final path = Platform.environment['FOCUS_WORKFLOW_PROBE_DIR'];
@@ -27,7 +28,7 @@ Future<void> main() async {
     for (final id in ['first', 'second']) {
       await c.saveTask(TaskItem(
           id: id,
-          name: 'Task $id',
+          name: id == 'first' ? '本周学习任务：复习课程与完成练习' : 'Task $id',
           notes: 'Probe task',
           subtasks: const [SubtaskItem(id: 's1', name: 'Review examples')],
           modified: DateTime.utc(2026)));
@@ -53,6 +54,68 @@ Future<void> main() async {
       await Future<void>.delayed(const Duration(milliseconds: 100));
     }
     if (!proceed.existsSync()) throw StateError('Host handshake timed out');
+    Element? findElement(bool Function(Widget) matches) {
+      Element? found;
+      void visit(Element element) {
+        if (found != null) return;
+        if (matches(element.widget)) {
+          found = element;
+          return;
+        }
+        element.visitChildElements(visit);
+      }
+
+      boundary.currentContext!.visitChildElements(visit);
+      return found;
+    }
+
+    Future<void> editorScreenshot(String name) async {
+      final render =
+          boundary.currentContext!.findRenderObject() as RenderRepaintBoundary;
+      final shot = await render.toImage();
+      final bytes = await shot.toByteData(format: ui.ImageByteFormat.png);
+      File('${folder.path}/$name.png')
+          .writeAsBytesSync(bytes!.buffer.asUint8List());
+      shot.dispose();
+    }
+
+    final task = c.tasks.firstWhere((t) => t.id == 'first');
+    final edited = showDialog<TaskItem>(
+        context: findElement((w) => w is Home)!,
+        builder: (_) => TaskEditor(task: task));
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    final checkbox = findElement((w) => w is Checkbox)!.widget as Checkbox;
+    checkbox.onChanged!(true);
+    await Future<void>.delayed(const Duration(milliseconds: 600));
+    if (findElement((w) => w.key == const ValueKey('subtask-sound-error')) !=
+        null) {
+      throw StateError('Subtask completion sound failed');
+    }
+    await editorScreenshot('editor-completed');
+    await Scrollable.ensureVisible(
+        findElement((w) => w is Text && w.data == '选择日期')!);
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    final nameBox = findElement((w) => w.key == const ValueKey('task-name'))!
+        .findRenderObject() as RenderBox;
+    if (nameBox.localToGlobal(Offset.zero).dy < 0) {
+      throw StateError('Task name scrolled out of view');
+    }
+    await editorScreenshot('editor-scrolled');
+    final save = findElement((w) =>
+            w is FilledButton &&
+            w.child is Text &&
+            (w.child as Text).data == '保存')!
+        .widget as FilledButton;
+    save.onPressed!();
+    final updated = await edited;
+    if (updated == null ||
+        !updated.subtasks.single.completed ||
+        updated.name != task.name) {
+      throw StateError(
+          'Subtask editor did not preserve the task name and completion');
+    }
+    await c.saveTask(updated);
+    await Future<void>.delayed(const Duration(milliseconds: 500));
     await c.toggleTaskCompleted('first');
     if (c.message.isNotEmpty ||
         c.tasks.last.id != 'first' ||
@@ -105,6 +168,9 @@ Future<void> main() async {
       'ok': true,
       'nativePinEnabledDisabled': true,
       'completionBellDispatched': true,
+      'subtaskCompletionBellDispatched': true,
+      'taskNameVisibleAfterScroll': true,
+      'editedSubtaskPersisted': true,
       'completedTaskLast': true,
       'taskDeletionPersisted': true,
       'automaticLongRest': true,

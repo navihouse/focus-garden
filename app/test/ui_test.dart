@@ -13,6 +13,11 @@ import 'package:focus_garden/data/store.dart';
 import 'package:focus_garden/domain/models.dart';
 
 void main() {
+  setUp(() => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+      .setMockMethodCallHandler(AppController.native, (_) async => null));
+  tearDown(() => TestDefaultBinaryMessengerBinding
+      .instance.defaultBinaryMessenger
+      .setMockMethodCallHandler(AppController.native, null));
   const capture = bool.fromEnvironment('CAPTURE_PREVIEWS');
   setUpAll(() async {
     // Each test uses a separate in-memory database, not shared executors.
