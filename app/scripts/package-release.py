@@ -29,7 +29,9 @@ def archive(folder, destination, prefix='', omit=None):
 release = app / 'build/windows/x64/runner/Release'
 if not (release / 'focus_garden.exe').exists():
     raise SystemExit('Build production Windows main.dart first')
-desktop = output / 'FocusGarden-Windows-x64'
+# Versioned destinations let a new build be delivered while an older portable
+# release is running. Never overwrite a user's loaded EXE/DLLs.
+desktop = output / f'FocusGarden-{version}-Windows-x64' / 'FocusGarden-Windows-x64'
 shutil.copytree(release, desktop, dirs_exist_ok=True)
 # Flutter's test build may leave a host-only asset map at the bundle root. The
 # runtime uses data/flutter_assets/NativeAssetsManifest.json, which is portable.

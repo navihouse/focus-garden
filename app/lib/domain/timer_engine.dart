@@ -13,6 +13,7 @@ class TimerEngine {
   int _restDurationMs = 0;
   int get restDurationMs => _restDurationMs;
   int get plannedSeconds => _base?.plannedSeconds ?? 0;
+  String get taskName => _base?.taskName ?? '自由专注';
 
   void start(
       {required String id,

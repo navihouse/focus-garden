@@ -6,6 +6,7 @@ import 'package:media_kit/media_kit.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
+import 'package:window_manager/window_manager.dart';
 import 'data/store.dart';
 import 'domain/models.dart';
 import 'domain/timer_engine.dart';
@@ -21,6 +22,7 @@ class AppController extends ChangeNotifier {
   Settings settings = const Settings();
   String device = '', message = '', recoveryMessage = '';
   String? selectedTask;
+  bool focusPinned = false;
   final engine = TimerEngine();
   final clock = Stopwatch()..start();
   Player? player;
@@ -71,7 +73,10 @@ class AppController extends ChangeNotifier {
   bool get canPlayMusic => phase == Phase.focus || (!android && !active);
   String get currentTaskName => android
       ? androidState['taskName'] as String? ?? '自由专注'
-      : (tasks.where((t) => t.id == selectedTask).firstOrNull?.name ?? '自由专注');
+      : active && !isRest
+          ? engine.taskName
+          : (tasks.where((t) => t.id == selectedTask).firstOrNull?.name ??
+              '自由专注');
 
   Future<void> initialize({Directory? directory}) async {
     dataDirectory = directory ?? await getApplicationSupportDirectory();
@@ -159,10 +164,63 @@ class AppController extends ChangeNotifier {
 
   Future<void> refresh() async {
     tasks = await store.tasks();
-    tasks.sort((a, b) => b.modified.compareTo(a.modified));
+    tasks.sort((a, b) {
+      final group =
+          (a.status == 'done' ? 1 : 0).compareTo(b.status == 'done' ? 1 : 0);
+      if (group != 0) return group;
+      // New completions go to the very bottom, including after older ones.
+      final time = a.status == 'done'
+          ? a.modified.compareTo(b.modified)
+          : b.modified.compareTo(a.modified);
+      return time != 0 ? time : a.id.compareTo(b.id);
+    });
     sessions = await store.sessions();
     sessions.sort((a, b) => b.started.compareTo(a.started));
     notifyListeners();
+  }
+
+  Future<void> setFocusPinned(bool pinned) async {
+    if (!Platform.isWindows) return;
+    await windowManager.setAlwaysOnTop(pinned);
+    focusPinned = pinned;
+    notifyListeners();
+  }
+
+  Future<void> saveTask(TaskItem task) async {
+    // Completion is only available from the list's circular button.
+    final previous = tasks.where((t) => t.id == task.id).firstOrNull;
+    if (task.status == 'done' && previous?.status != 'done') {
+      throw StateError('请点击任务左侧圆环完成任务');
+    }
+    await store.task(task);
+    await refresh();
+  }
+
+  Future<void> toggleTaskCompleted(String id) async {
+    final task = tasks.where((t) => t.id == id).firstOrNull;
+    if (task == null) return;
+    final done = task.status != 'done';
+    await store.task(TaskItem.fromJson({
+      ...task.toJson(),
+      'status': done ? 'done' : 'todo',
+      'modified': DateTime.now().toUtc().toIso8601String(),
+    }));
+    if (done && selectedTask == id && !active) selectedTask = null;
+    await refresh();
+    if (done) {
+      try {
+        await native.invokeMethod('taskCompleted');
+      } catch (_) {
+        // Audio failure must not undo the saved task or stop a focus timer.
+        message = '任务已完成，提示音暂时无法播放。';
+      }
+    }
+  }
+
+  Future<void> deleteTask(String id) async {
+    await store.deleteTask(id);
+    if (selectedTask == id) selectedTask = null;
+    await refresh();
   }
 
   Future<void> refreshDesktopIntegration() async {

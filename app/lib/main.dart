@@ -184,7 +184,8 @@ class _HomeState extends State<Home> {
   @override
   Widget build(BuildContext context) {
     final wide = MediaQuery.sizeOf(context).width >= 850;
-    final body = switch (page) {
+    final pinned = c.focusPinned;
+    final body = switch (pinned ? 0 : page) {
       0 => focusPage(),
       1 => taskPage(),
       2 => musicPage(),
@@ -195,17 +196,28 @@ class _HomeState extends State<Home> {
         appBar: AppBar(
             title: Text(wide ? '专注花园  /  ${titles[page]}' : titles[page]),
             actions: [
-              IconButton(
-                  tooltip: '备份与合并',
-                  onPressed: backupDialog,
-                  icon: const Icon(Icons.import_export)),
-              IconButton(
-                  tooltip: '设置',
-                  onPressed: settingsDialog,
-                  icon: const Icon(Icons.tune)),
+              if (Platform.isWindows && (page == 0 || pinned))
+                IconButton(
+                    key: const ValueKey('focus-pin'),
+                    tooltip: pinned ? '取消专注置顶' : '专注置顶',
+                    isSelected: pinned,
+                    icon: const Icon(Icons.push_pin_outlined),
+                    selectedIcon: const Icon(Icons.push_pin),
+                    onPressed: () =>
+                        c.perform(() => c.setFocusPinned(!c.focusPinned))),
+              if (!pinned) ...[
+                IconButton(
+                    tooltip: '备份与合并',
+                    onPressed: backupDialog,
+                    icon: const Icon(Icons.import_export)),
+                IconButton(
+                    tooltip: '设置',
+                    onPressed: settingsDialog,
+                    icon: const Icon(Icons.tune)),
+              ],
               const SizedBox(width: 12)
             ]),
-        bottomNavigationBar: wide
+        bottomNavigationBar: wide || pinned
             ? null
             : NavigationBar(
                 selectedIndex: page,
@@ -215,7 +227,7 @@ class _HomeState extends State<Home> {
                     (i) => NavigationDestination(
                         icon: Icon(icons[i]), label: titles[i]))),
         body: Row(children: [
-          if (wide)
+          if (wide && !pinned)
             NavigationRail(
                 selectedIndex: page,
                 labelType: NavigationRailLabelType.all,
@@ -281,23 +293,32 @@ class _HomeState extends State<Home> {
               child: Column(children: [
                 SizedBox(
                     width: 420,
-                    child: DropdownButtonFormField<String?>(
-                        initialValue: c.selectedTask,
-                        decoration: const InputDecoration(labelText: '本次任务'),
-                        items: [
-                          const DropdownMenuItem(
-                              value: null, child: Text('自由专注')),
-                          ...c.tasks
-                              .where((t) =>
-                                  t.status != 'done' || t.id == c.selectedTask)
-                              .map((t) => DropdownMenuItem(
-                                  value: t.id,
-                                  child: Text(t.name,
-                                      overflow: TextOverflow.ellipsis)))
-                        ],
-                        onChanged: c.active
-                            ? null
-                            : (v) => setState(() => c.selectedTask = v))),
+                    child: c.active
+                        ? InputDecorator(
+                            decoration:
+                                const InputDecoration(labelText: '本次任务'),
+                            child: Text(c.currentTaskName,
+                                overflow: TextOverflow.ellipsis))
+                        : DropdownButtonFormField<String?>(
+                            key: ValueKey('focus-task-${c.selectedTask}'),
+                            initialValue: c.selectedTask,
+                            decoration:
+                                const InputDecoration(labelText: '本次任务'),
+                            items: [
+                              const DropdownMenuItem(
+                                  value: null, child: Text('自由专注')),
+                              ...c.tasks
+                                  .where((t) =>
+                                      t.status != 'done' ||
+                                      t.id == c.selectedTask)
+                                  .map((t) => DropdownMenuItem(
+                                      value: t.id,
+                                      child: Text(t.name,
+                                          overflow: TextOverflow.ellipsis)))
+                            ],
+                            onChanged: c.active
+                                ? null
+                                : (v) => setState(() => c.selectedTask = v))),
                 const SizedBox(height: 30),
                 SizedBox(
                     width: 260,
@@ -372,6 +393,17 @@ class _HomeState extends State<Home> {
         metric('本周投入', '${minutes(week.milliseconds)} 分钟'),
         metric('本周完成', '${week.completed} 个番茄')
       ]),
+      const SizedBox(height: 24),
+      Row(children: [
+        Expanded(
+            child: Text('专注任务', style: Theme.of(context).textTheme.titleLarge)),
+        TextButton.icon(
+            onPressed: () => editTask(),
+            icon: const Icon(Icons.add),
+            label: const Text('添加任务')),
+      ]),
+      if (c.tasks.isEmpty) const Text('添加任务后，可点击左侧圆环标记完成。'),
+      ...c.tasks.map(taskCard),
       if (c.android &&
           (c.permissions['notifications'] != true ||
               c.permissions['exact'] != true))
@@ -482,47 +514,84 @@ class _HomeState extends State<Home> {
           const Padding(
               padding: EdgeInsets.all(40),
               child: Text('还没有任务。添加一个任务，记录预计番茄数与实际投入。')),
-        ...c.tasks.map((t) {
-          final records =
-              c.sessions.where((s) => s.taskId == t.id && !s.excluded);
-          return Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: Card(
-                  child: ListTile(
-                      leading: Icon(t.status == 'done'
-                          ? Icons.check_circle_outline
-                          : Icons.radio_button_unchecked),
-                      title: Text(t.name),
-                      subtitle: Text(
-                          '${t.category.isEmpty ? '未分类' : t.category} · ${taskStatuses[t.status]}\n'
-                          '完成 ${records.where((s) => s.completed).length} / ${t.estimate} 个番茄 · ${minutes(records.fold(0, (n, s) => n + s.milliseconds))} 分钟${t.due == null ? '' : '\n截止 ${dateText(t.due!)}'}${t.subtasks.isEmpty ? '' : '\n子任务 ${t.subtasks.where((s) => s.completed).length}/${t.subtasks.length} 完成'}${t.notes.isEmpty ? '' : '\n备注：${t.notes.replaceAll('\n', ' ')}'}',
-                          maxLines: 5,
-                          overflow: TextOverflow.ellipsis),
-                      isThreeLine: true,
-                      onTap: () => editTask(t),
-                      trailing: PopupMenuButton<String>(
-                          onSelected: (v) => c.perform(() async {
-                                await c.store.task(TaskItem.fromJson({
-                                  ...t.toJson(),
-                                  'status': v,
-                                  'modified':
-                                      DateTime.now().toUtc().toIso8601String()
-                                }));
-                                await c.refresh();
-                              }),
-                          itemBuilder: (_) => taskStatuses.entries
-                              .map((e) => PopupMenuItem(
-                                  value: e.key, child: Text(e.value)))
-                              .toList()))));
-        }),
+        ...c.tasks.map(taskCard),
       ]);
+  Widget taskCard(TaskItem t) {
+    final records = c.sessions.where((s) => s.taskId == t.id && !s.excluded);
+    return Padding(
+        key: ValueKey('task-card-${t.id}'),
+        padding: const EdgeInsets.only(bottom: 12),
+        child: Card(
+            child: ListTile(
+                leading: IconButton(
+                    key: ValueKey('complete-task-${t.id}'),
+                    tooltip: t.status == 'done' ? '恢复为待办' : '完成任务',
+                    onPressed: () =>
+                        c.perform(() => c.toggleTaskCompleted(t.id)),
+                    icon: Icon(t.status == 'done'
+                        ? Icons.check_circle_outline
+                        : Icons.radio_button_unchecked)),
+                title: Text(t.name,
+                    style: TextStyle(
+                        decoration: t.status == 'done'
+                            ? TextDecoration.lineThrough
+                            : null)),
+                subtitle: Text(
+                    '${t.category.isEmpty ? '未分类' : t.category} · ${taskStatuses[t.status]}\n'
+                    '完成 ${records.where((s) => s.completed).length} / ${t.estimate} 个番茄 · ${minutes(records.fold(0, (n, s) => n + s.milliseconds))} 分钟${t.due == null ? '' : '\n截止 ${dateText(t.due!)}'}${t.subtasks.isEmpty ? '' : '\n子任务 ${t.subtasks.where((s) => s.completed).length}/${t.subtasks.length} 完成'}${t.notes.isEmpty ? '' : '\n备注：${t.notes.replaceAll('\n', ' ')}'}',
+                    maxLines: 5,
+                    overflow: TextOverflow.ellipsis),
+                isThreeLine: true,
+                onTap: () => editTask(t),
+                trailing: PopupMenuButton<String>(
+                    key: ValueKey('task-menu-${t.id}'),
+                    tooltip: '任务选项',
+                    onSelected: (v) {
+                      if (v == 'delete') {
+                        deleteTask(t);
+                        return;
+                      }
+                      c.perform(() => c.saveTask(TaskItem.fromJson({
+                            ...t.toJson(),
+                            'status': v,
+                            'modified': DateTime.now().toUtc().toIso8601String()
+                          })));
+                    },
+                    itemBuilder: (_) => [
+                          ...taskStatuses.entries
+                              .where((e) => e.key != 'done')
+                              .map((e) => PopupMenuItem(
+                                  value: e.key, child: Text(e.value))),
+                          const PopupMenuDivider(),
+                          const PopupMenuItem(
+                              value: 'delete', child: Text('删除任务')),
+                        ]))));
+  }
+
+  Future<void> deleteTask(TaskItem task) async {
+    final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+              title: const Text('删除任务？'),
+              content: Text('将删除“${task.name}”及其子任务和备注，已保存的专注历史会保留。'),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(ctx, false),
+                    child: const Text('取消')),
+                FilledButton(
+                    onPressed: () => Navigator.pop(ctx, true),
+                    child: const Text('删除')),
+              ],
+            ));
+    if (confirmed == true) await c.perform(() => c.deleteTask(task.id));
+  }
+
   Future<void> editTask([TaskItem? task]) async {
     final saved = await showDialog<TaskItem>(
         context: context, builder: (_) => TaskEditor(task: task));
     if (saved != null) {
       await c.perform(() async {
-        await c.store.task(saved);
-        await c.refresh();
+        await c.saveTask(saved);
       });
     }
   }

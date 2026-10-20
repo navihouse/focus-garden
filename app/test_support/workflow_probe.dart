@@ -1,0 +1,84 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:ui' as ui;
+import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:media_kit/media_kit.dart';
+import 'package:window_manager/window_manager.dart';
+import 'package:focus_garden/app_controller.dart';
+import 'package:focus_garden/domain/models.dart';
+import 'package:focus_garden/main.dart' show FocusApp;
+
+Future<void> main() async {
+  final path = Platform.environment['FOCUS_WORKFLOW_PROBE_DIR'];
+  if (path == null || Platform.environment['FOCUS_NATIVE_PROBE'] != '1') {
+    throw StateError('Explicit isolated probe environment required');
+  }
+  final folder = Directory(path)..createSync(recursive: true);
+  try {
+    WidgetsFlutterBinding.ensureInitialized();
+    MediaKit.ensureInitialized();
+    await windowManager.ensureInitialized();
+    await windowManager.setSize(const Size(900, 950));
+    final c = AppController();
+    await c.initialize(directory: Directory('${folder.path}/data'));
+    for (final id in ['first', 'second']) {
+      await c.saveTask(TaskItem(
+          id: id,
+          name: 'Task $id',
+          notes: 'Probe task',
+          subtasks: const [SubtaskItem(id: 's1', name: 'Review examples')],
+          modified: DateTime.utc(2026)));
+    }
+    final boundary = GlobalKey();
+    runApp(RepaintBoundary(key: boundary, child: FocusApp(c)));
+    await Future<void>.delayed(const Duration(seconds: 2));
+    await c.setFocusPinned(true);
+    if (!await windowManager.isAlwaysOnTop()) {
+      throw StateError('Native pin did not take effect');
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    final render =
+        boundary.currentContext!.findRenderObject() as RenderRepaintBoundary;
+    final screenshot = await render.toImage();
+    final png = await screenshot.toByteData(format: ui.ImageByteFormat.png);
+    File('${folder.path}/pinned.png')
+        .writeAsBytesSync(png!.buffer.asUint8List());
+    screenshot.dispose();
+    File('${folder.path}/pinned.json').writeAsStringSync('{"pinned":true}');
+    final proceed = File('${folder.path}/continue');
+    for (var i = 0; i < 300 && !proceed.existsSync(); i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    if (!proceed.existsSync()) throw StateError('Host handshake timed out');
+    await c.toggleTaskCompleted('first');
+    if (c.message.isNotEmpty ||
+        c.tasks.last.id != 'first' ||
+        c.tasks.last.status != 'done') {
+      throw StateError('Completion or native bell failed: ${c.message}');
+    }
+    await c.setFocusPinned(false);
+    if (await windowManager.isAlwaysOnTop()) {
+      throw StateError('Native pin did not clear');
+    }
+    await c.deleteTask('second');
+    final saved = await c.store.tasks();
+    if (saved.length != 1 || saved.single.status != 'done') {
+      throw StateError('SQLite task update failed');
+    }
+    File('${folder.path}/result.json').writeAsStringSync(jsonEncode({
+      'ok': true,
+      'nativePinEnabledDisabled': true,
+      'completionBellDispatched': true,
+      'completedTaskLast': true,
+      'taskDeletionPersisted': true,
+      'noFocusSessionsCreated': c.sessions.isEmpty,
+    }));
+    // The host validates window styles and exits via the real tray command.
+  } catch (e, stack) {
+    File('${folder.path}/result.json').writeAsStringSync(
+        jsonEncode({'ok': false, 'error': '$e', 'stack': '$stack'}));
+    exit(1);
+  }
+}

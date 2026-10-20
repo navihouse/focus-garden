@@ -1,5 +1,6 @@
 #include "flutter_window.h"
 #include "desktop_integration.h"
+#include "task_sound.h"
 
 #include <optional>
 #include <shellapi.h>
@@ -35,7 +36,10 @@ bool FlutterWindow::OnCreate() {
       flutter_controller_->engine()->messenger(), "focus_garden/native",
       &flutter::StandardMethodCodec::GetInstance());
   focus_channel_->SetMethodCallHandler([this](const auto& call, auto result) {
-    if (call.method_name() == "getDesktopIntegration") {
+    if (call.method_name() == "taskCompleted") {
+      if (PlayTaskCompletionSound()) result->Success();
+      else result->Error("TASK_SOUND", "Could not play completion sound");
+    } else if (call.method_name() == "getDesktopIntegration") {
       DesktopIntegrationState state;
       std::string error;
       if (!ReadDesktopIntegration(&state, &error)) { result->Error("DESKTOP_INTEGRATION", error); return; }

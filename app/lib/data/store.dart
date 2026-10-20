@@ -35,6 +35,8 @@ class LocalStore extends GeneratedDatabase {
   Future<void> task(TaskItem task) => customStatement(
       'INSERT OR REPLACE INTO tasks VALUES (?,?)',
       [task.id, jsonEncode(task.toJson())]);
+  Future<void> deleteTask(String id) =>
+      customStatement('DELETE FROM tasks WHERE id = ?', [id]);
   Future<void> session(FocusSession session, {bool replace = false}) =>
       customStatement(
           'INSERT OR ${replace ? 'REPLACE' : 'IGNORE'} INTO sessions VALUES (?,?)',

@@ -12,6 +12,7 @@ class TaskEditor extends StatefulWidget {
 class _SubtaskDraft {
   final String id;
   final TextEditingController name;
+  final FocusNode focus = FocusNode();
   bool completed;
   _SubtaskDraft(SubtaskItem item)
       : id = item.id,
@@ -27,10 +28,12 @@ class _TaskEditorState extends State<TaskEditor> {
       TextEditingController(text: '${widget.task?.estimate ?? 1}');
   late final notes = TextEditingController(text: widget.task?.notes);
   final nextStep = TextEditingController();
+  final nextFocus = FocusNode();
+  String? stepError;
   late final subtasks =
       (widget.task?.subtasks ?? []).map(_SubtaskDraft.new).toList();
   // Keep removed controllers alive until the dialog finishes its exit frame.
-  final retired = <TextEditingController>[];
+  final retired = <_SubtaskDraft>[];
   late String status = widget.task?.status ?? 'todo';
   late DateTime? due = widget.task?.due;
 
@@ -43,9 +46,13 @@ class _TaskEditorState extends State<TaskEditor> {
       notes,
       nextStep,
       ...subtasks.map((s) => s.name),
-      ...retired
+      ...retired.map((s) => s.name)
     ]) {
       field.dispose();
+    }
+    nextFocus.dispose();
+    for (final step in [...subtasks, ...retired]) {
+      step.focus.dispose();
     }
     super.dispose();
   }
@@ -58,9 +65,17 @@ class _TaskEditorState extends State<TaskEditor> {
           _SubtaskDraft(SubtaskItem(id: AppController.uuid.v4(), name: value)));
       nextStep.clear();
     });
+    nextFocus.requestFocus();
   }
 
   void save() {
+    // ReorderableListView builds rows lazily; validate off-screen drafts too.
+    if (subtasks
+        .any((s) => s.name.text.trim().isEmpty || s.name.text.length > 200)) {
+      setState(() => stepError = '请填写所有子任务名称（最多 200 字），或从菜单删除空白子任务。');
+      return;
+    }
+    setState(() => stepError = null);
     if (!form.currentState!.validate()) return;
     if (nextStep.text.trim().isNotEmpty) {
       if (subtasks.length >= 200) {
@@ -116,70 +131,91 @@ class _TaskEditorState extends State<TaskEditor> {
                               '子任务 · ${subtasks.where((s) => s.completed).length}/${subtasks.length} 完成',
                               style: Theme.of(context).textTheme.titleSmall),
                           const SizedBox(height: 6),
-                          for (final entry in subtasks.indexed)
-                            Row(
-                                key: ValueKey('step-${entry.$2.id}'),
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Checkbox(
-                                      value: entry.$2.completed,
-                                      semanticLabel:
-                                          '完成子任务 ${entry.$2.name.text}',
-                                      onChanged: (v) => setState(
-                                          () => entry.$2.completed = v!)),
-                                  Expanded(
-                                      child: TextFormField(
-                                          key: ValueKey(
-                                              'step-name-${entry.$2.id}'),
-                                          controller: entry.$2.name,
-                                          maxLength: 200,
-                                          style: TextStyle(
-                                              decoration: entry.$2.completed
-                                                  ? TextDecoration.lineThrough
-                                                  : null),
-                                          decoration: const InputDecoration(
-                                              hintText: '子任务', counterText: ''),
-                                          validator: (v) => v!.trim().isEmpty
-                                              ? '请填写子任务，或从菜单删除'
-                                              : v.length > 200
-                                                  ? '最多 200 字'
-                                                  : null)),
-                                  PopupMenuButton<String>(
-                                      tooltip: '子任务选项',
-                                      onSelected: (action) => setState(() {
-                                            final i = entry.$1;
-                                            if (action == 'remove') {
-                                              retired.add(
-                                                  subtasks.removeAt(i).name);
-                                            } else {
-                                              final destination = action == 'up'
-                                                  ? i - 1
-                                                  : i + 1;
-                                              if (destination >= 0 &&
-                                                  destination <
-                                                      subtasks.length) {
-                                                final item =
-                                                    subtasks.removeAt(i);
-                                                subtasks.insert(
-                                                    destination, item);
-                                              }
-                                            }
-                                          }),
-                                      itemBuilder: (_) => [
-                                            PopupMenuItem(
-                                                value: 'up',
-                                                enabled: entry.$1 > 0,
-                                                child: const Text('上移')),
-                                            PopupMenuItem(
-                                                value: 'down',
-                                                enabled: entry.$1 + 1 <
-                                                    subtasks.length,
-                                                child: const Text('下移')),
-                                            const PopupMenuItem(
-                                                value: 'remove',
-                                                child: Text('删除子任务')),
-                                          ]),
-                                ]),
+                          SizedBox(
+                            height: (subtasks.length * 64.0)
+                                .clamp(0, 320)
+                                .toDouble(),
+                            child: ReorderableListView.builder(
+                              key: const ValueKey('subtask-list'),
+                              buildDefaultDragHandles: false,
+                              itemCount: subtasks.length,
+                              onReorderItem: (oldIndex, newIndex) =>
+                                  setState(() {
+                                final step = subtasks.removeAt(oldIndex);
+                                subtasks.insert(newIndex, step);
+                              }),
+                              itemBuilder: (context, index) {
+                                final entry = (index, subtasks[index]);
+                                return Row(
+                                    key: ValueKey('step-${entry.$2.id}'),
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Checkbox(
+                                          value: entry.$2.completed,
+                                          semanticLabel:
+                                              '完成子任务 ${entry.$2.name.text}',
+                                          onChanged: (v) => setState(
+                                              () => entry.$2.completed = v!)),
+                                      Expanded(
+                                          child: TextFormField(
+                                              key: ValueKey(
+                                                  'step-name-${entry.$2.id}'),
+                                              controller: entry.$2.name,
+                                              focusNode: entry.$2.focus,
+                                              textInputAction:
+                                                  TextInputAction.next,
+                                              onFieldSubmitted: (_) =>
+                                                  entry.$1 + 1 < subtasks.length
+                                                      ? subtasks[entry.$1 + 1]
+                                                          .focus
+                                                          .requestFocus()
+                                                      : nextFocus
+                                                          .requestFocus(),
+                                              maxLength: 200,
+                                              style: TextStyle(
+                                                  decoration: entry.$2.completed
+                                                      ? TextDecoration
+                                                          .lineThrough
+                                                      : null),
+                                              decoration: const InputDecoration(
+                                                  hintText: '子任务',
+                                                  counterText: ''),
+                                              validator: (v) =>
+                                                  v!.trim().isEmpty
+                                                      ? '请填写子任务，或从菜单删除'
+                                                      : v.length > 200
+                                                          ? '最多 200 字'
+                                                          : null)),
+                                      MouseRegion(
+                                          cursor: SystemMouseCursors.grab,
+                                          child: ReorderableDragStartListener(
+                                              key: ValueKey(
+                                                  'step-drag-${entry.$2.id}'),
+                                              index: entry.$1,
+                                              child: PopupMenuButton<String>(
+                                                  tooltip: '拖动排序，点击删除',
+                                                  onSelected: (action) =>
+                                                      setState(() {
+                                                        retired.add(
+                                                            subtasks.removeAt(
+                                                                entry.$1));
+                                                      }),
+                                                  itemBuilder: (_) => const [
+                                                        PopupMenuItem(
+                                                            value: 'remove',
+                                                            child:
+                                                                Text('删除子任务')),
+                                                      ]))),
+                                    ]);
+                              },
+                            ),
+                          ),
+                          if (stepError != null)
+                            Text(stepError!,
+                                style: TextStyle(
+                                    color:
+                                        Theme.of(context).colorScheme.error)),
                           const SizedBox(height: 8),
                           Row(
                               crossAxisAlignment: CrossAxisAlignment.start,
@@ -188,6 +224,9 @@ class _TaskEditorState extends State<TaskEditor> {
                                     child: TextFormField(
                                         key: const ValueKey('new-subtask'),
                                         controller: nextStep,
+                                        focusNode: nextFocus,
+                                        textInputAction: TextInputAction.next,
+                                        onEditingComplete: () {},
                                         enabled: subtasks.length < 200,
                                         maxLength: 200,
                                         onFieldSubmitted: (_) => addStep(),
@@ -235,19 +274,22 @@ class _TaskEditorState extends State<TaskEditor> {
                                 return n < 1 || n > 999 ? '填写 1–999' : null;
                               }),
                           const SizedBox(height: 16),
-                          DropdownButtonFormField<String>(
-                              initialValue: status,
-                              decoration:
-                                  const InputDecoration(labelText: '状态'),
-                              items: const [
-                                DropdownMenuItem(
-                                    value: 'todo', child: Text('待办')),
-                                DropdownMenuItem(
-                                    value: 'doing', child: Text('进行中')),
-                                DropdownMenuItem(
-                                    value: 'done', child: Text('已完成'))
-                              ],
-                              onChanged: (v) => status = v!),
+                          if (status == 'done')
+                            const InputDecorator(
+                                decoration: InputDecoration(labelText: '状态'),
+                                child: Text('已完成（点击列表左侧圆环可恢复）'))
+                          else
+                            DropdownButtonFormField<String>(
+                                initialValue: status,
+                                decoration:
+                                    const InputDecoration(labelText: '状态'),
+                                items: const [
+                                  DropdownMenuItem(
+                                      value: 'todo', child: Text('待办')),
+                                  DropdownMenuItem(
+                                      value: 'doing', child: Text('进行中')),
+                                ],
+                                onChanged: (v) => status = v!),
                           const SizedBox(height: 8),
                           Row(children: [
                             Expanded(
