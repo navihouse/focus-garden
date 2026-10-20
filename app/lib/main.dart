@@ -383,7 +383,7 @@ class _HomeState extends State<Home> {
                                 : '开始短休息')),
                     ]),
                 const SizedBox(height: 18),
-                Text('本轮已完成 ${c.completedCycle % 4} / 4 个番茄 · 下一阶段手动开始'),
+                Text('已完成 ${c.completedCycle} 个番茄 · 专注后自动休息，休息后手动专注'),
                 const SizedBox(height: 20),
                 musicControls(),
               ]))),

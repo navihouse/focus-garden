@@ -31,7 +31,10 @@ class FocusService : Service() {
         session = MediaSession.Builder(this, runtime.player).build()
         wakeLock = getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "FocusGarden:Countdown")
         getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel("focus_timer", "专注计时", NotificationManager.IMPORTANCE_LOW))
-        getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel("focus_done", "到点提醒", NotificationManager.IMPORTANCE_HIGH))
+        getSystemService(NotificationManager::class.java).createNotificationChannel(
+            NotificationChannel("focus_done_cues_v2", "到点提醒", NotificationManager.IMPORTANCE_HIGH).apply {
+                setSound(null, null); enableVibration(false)
+            })
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val runtime = FocusRuntime.get(this)
@@ -71,7 +74,7 @@ class FocusService : Service() {
     }
     fun completed(text: String) {
         val open = PendingIntent.getActivity(this, 2, Intent(this, MainActivity::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        getSystemService(NotificationManager::class.java).notify(8, Notification.Builder(this, "focus_done")
+        getSystemService(NotificationManager::class.java).notify(8, Notification.Builder(this, "focus_done_cues_v2")
             .setSmallIcon(android.R.drawable.ic_lock_idle_alarm).setContentTitle("专注花园").setContentText(text)
             .setContentIntent(open).setAutoCancel(true).build())
     }
@@ -113,6 +116,8 @@ class FocusRuntime private constructor(private val context: Context) {
     private var restTick = 0L
     private var restDuration = 0L
     private var cycle = 0
+    private var shortBreakSeconds = 300
+    private var longBreakSeconds = 900
     private var muted = false
     private var error = ""
     private var checkpoint: JSONObject? = null
@@ -200,12 +205,20 @@ class FocusRuntime private constructor(private val context: Context) {
         if(Build.VERSION.SDK_INT < 31 || manager.canScheduleExactAlarms()) manager.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, at, alarmIntent())
         else manager.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, at, alarmIntent())
     }
+    fun configureBreaks(args: JSONObject) {
+        val short = args.optInt("shortBreakSeconds", shortBreakSeconds)
+        val long = args.optInt("longBreakSeconds", longBreakSeconds)
+        require(short in 1..10800 && long in 1..10800)
+        shortBreakSeconds = short; longBreakSeconds = long
+    }
     fun start(args: JSONObject) {
         check(!active()) { "已有计时正在进行" }
         val seconds = args.getInt("seconds"); require(seconds in 1..10800)
+        configureBreaks(args)
         spans = JSONArray(); pauses = JSONArray(); closedMs = 0; pauseWall = 0; isRest = false
         plannedMs = seconds * 1000L; openWall = now(); openTick = tickNow()
         base = JSONObject(args.toString()).removeAndReturn("seconds")
+            .removeAndReturn("shortBreakSeconds").removeAndReturn("longBreakSeconds")
             .put("plannedSeconds", seconds).put("started", iso(openWall)).put("ended", iso(openWall))
             .put("excluded", false).put("completed", false).put("reason", "interrupted").put("pauses", JSONArray()).put("spans", JSONArray())
         phase = "focus"; error = ""; saveCheckpoint(); refreshService(); schedule()
@@ -242,8 +255,21 @@ class FocusRuntime private constructor(private val context: Context) {
             if(reason == "completed") cycle++
         }
         val restWasActive = isRest
-        phase = "ended"; isRest = false; checkpoint = null; base = null; player.pause(); persist(); schedule()
-        if(reason == "completed") FocusService.instance?.completed(if(restWasActive) "休息结束，可以开始下一次专注。" else "本次专注已完成！休息由你手动开始。")
+        val autoRest = reason == "completed" && !restWasActive
+        // No idle gap: the player's callback must not stop the service between phases.
+        phase = if(autoRest) "rest" else "ended"; isRest = autoRest; checkpoint = null; base = null
+        if(autoRest) {
+            restDuration = (if(cycle % 4 == 0) longBreakSeconds else shortBreakSeconds) * 1000L
+            restLeft = restDuration; restTick = tickNow()
+        }
+        persist(); schedule()
+        try { player.pause() } catch(e: Exception) { error = "音乐暂停失败；计时继续。" }
+        if(reason == "completed") {
+            try { CompletionSounds.play(if(restWasActive) "rest" else "focus") }
+            catch(e: Exception) { error = "计时阶段已更新，提示音暂时无法播放。" }
+            try { FocusService.instance?.completed(if(restWasActive) "休息结束，请手动开始下一次专注。" else "本次专注已完成，已自动开始${if(cycle % 4 == 0) "长" else "短"}休息。") }
+            catch(e: Exception) { error = "计时阶段已更新，通知暂时无法显示。" }
+        }
         refreshService()
     }
     fun tick() {

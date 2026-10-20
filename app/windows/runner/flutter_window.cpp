@@ -39,6 +39,14 @@ bool FlutterWindow::OnCreate() {
     if (call.method_name() == "taskCompleted") {
       if (PlayTaskCompletionSound()) result->Success();
       else result->Error("TASK_SOUND", "Could not play completion sound");
+    } else if (call.method_name() == "timerSound") {
+      const auto* args = std::get_if<flutter::EncodableMap>(call.arguments());
+      const auto it = args ? args->find(flutter::EncodableValue("kind")) : flutter::EncodableMap::const_iterator{};
+      const auto* kind = args && it != args->end() ? std::get_if<std::string>(&it->second) : nullptr;
+      if (!kind || (*kind != "focus" && *kind != "rest")) {
+        result->Error("INVALID_ARGUMENT", "Expected focus or rest sound");
+      } else if (PlayTimerSound(*kind == "rest")) result->Success();
+      else result->Error("TIMER_SOUND", "Could not play timer sound");
     } else if (call.method_name() == "getDesktopIntegration") {
       DesktopIntegrationState state;
       std::string error;
@@ -81,7 +89,7 @@ bool FlutterWindow::OnCreate() {
       data.uFlags = NIF_ICON | NIF_TIP | NIF_INFO;
       data.hIcon = LoadIcon(nullptr, IDI_INFORMATION);
       wcscpy_s(data.szTip, L"Focus Garden"); wcscpy_s(data.szInfoTitle, L"Focus Garden");
-      wcsncpy_s(data.szInfo, text.c_str(), _TRUNCATE); data.dwInfoFlags = NIIF_INFO;
+      wcsncpy_s(data.szInfo, text.c_str(), _TRUNCATE); data.dwInfoFlags = NIIF_INFO | NIIF_NOSOUND;
       Shell_NotifyIconW(NIM_ADD, &data); Shell_NotifyIconW(NIM_MODIFY, &data);
       SetTimer(GetHandle(), 4397, 12000, nullptr);
       result->Success();

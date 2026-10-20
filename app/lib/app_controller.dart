@@ -92,6 +92,7 @@ class AppController extends ChangeNotifier {
     volume = (await store.get('volume') as num?)?.toDouble() ?? .6;
     await refresh();
     if (android) {
+      await native.invokeMethod('timerSettings', _breakSettings);
       await native.invokeMethod('recover');
       await pollAndroid();
       permissions = asJson(await native.invokeMethod('permissions'));
@@ -141,7 +142,7 @@ class AppController extends ChangeNotifier {
     }
     _ticker = Timer.periodic(const Duration(milliseconds: 500), (_) {
       if (_busy) return;
-      unawaited(perform(_tick));
+      unawaited(perform(tick));
     });
     notifyListeners();
   }
@@ -264,7 +265,7 @@ class AppController extends ChangeNotifier {
     completedCycle = (androidState['cycle'] as int?) ?? completedCycle;
   }
 
-  Future<void> _tick() async {
+  Future<void> tick() async {
     if (android) {
       await pollAndroid();
       return;
@@ -280,13 +281,14 @@ class AppController extends ChangeNotifier {
     if ([Phase.focus, Phase.rest].contains(phase) && remainingMs == 0) {
       if (phase == Phase.focus) {
         await end(reason: 'completed');
-        message = '本次专注已完成！休息由你手动开始。';
+        await startRest();
+        message = '本次专注已完成，已自动开始${completedCycle % 4 == 0 ? '长' : '短'}休息。';
+        await _deadlineAlert('focus');
       } else {
         engine.finish(DateTime.now().toUtc(), tick);
         message = '休息结束，可以开始下一次专注。';
+        await _deadlineAlert('rest');
       }
-      await SystemSound.play(SystemSoundType.alert);
-      await native.invokeMethod('notify', {'text': message});
     }
     if (phase == Phase.focus && tick - _lastSave >= 15000) {
       final s = engine.snapshot(DateTime.now().toUtc(), tick);
@@ -295,11 +297,39 @@ class AppController extends ChangeNotifier {
     }
   }
 
+  Future<void> _deadlineAlert(String kind) async {
+    // Persist and switch phases first. Each alert channel can fail independently.
+    try {
+      await native.invokeMethod('timerSound', {'kind': kind});
+    } catch (_) {
+      message += ' 提示音暂时无法播放。';
+    }
+    try {
+      await native.invokeMethod('notify', {'text': message});
+    } catch (_) {
+      message += ' 系统通知暂时无法显示。';
+    }
+  }
+
+  Json get _breakSettings => {
+        'shortBreakSeconds': settings.shortBreak * 60,
+        'longBreakSeconds': settings.longBreak * 60,
+      };
+
+  Future<void> _pauseMusicSafely() async {
+    try {
+      await player?.pause();
+    } catch (_) {
+      message = '音乐暂停失败，请检查音频设备；计时继续。';
+    }
+  }
+
   Future<void> startFocus({int? testSeconds}) async {
     if (active) return;
     final task = tasks.where((t) => t.id == selectedTask).firstOrNull;
     if (android) {
       await native.invokeMethod('start', {
+        ..._breakSettings,
         'id': uuid.v4(),
         'device': device,
         'taskId': task?.id,
@@ -379,7 +409,7 @@ class AppController extends ChangeNotifier {
     } else {
       await store.remove('checkpoint');
     }
-    await player!.pause();
+    await _pauseMusicSafely();
   }
 
   Future<void> startRest() async {
@@ -393,13 +423,14 @@ class AppController extends ChangeNotifier {
       await pollAndroid();
     } else {
       engine.startRest(seconds, clock.elapsedMilliseconds);
-      await player!.pause();
+      await _pauseMusicSafely();
     }
   }
 
   Future<void> saveSettings(Settings value) async {
     settings = value;
     await store.put('settings', value.toJson());
+    if (android) await native.invokeMethod('timerSettings', _breakSettings);
     notifyListeners();
   }
 

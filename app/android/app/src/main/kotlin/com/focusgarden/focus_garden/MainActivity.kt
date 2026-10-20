@@ -5,10 +5,6 @@ import android.app.AlarmManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
-import android.media.AudioManager
-import android.media.ToneGenerator
-import android.os.Handler
-import android.os.Looper
 import android.os.Build
 import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
@@ -27,11 +23,9 @@ class MainActivity : FlutterActivity() {
                     val args = call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()
                     when (call.method) {
                         "taskCompleted" -> {
-                            val tone = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 70)
-                            val played = tone.startTone(ToneGenerator.TONE_PROP_ACK, 150)
-                            Handler(Looper.getMainLooper()).postDelayed({ tone.release() }, 300)
-                            if (played) result.success(null) else result.error("TASK_SOUND", "Could not play completion sound", null)
+                            CompletionSounds.play("task"); result.success(null)
                         }
+                        "timerSettings" -> { runtime.configureBreaks(JSONObject(args)); result.success(null) }
                         "recover" -> result.success(null)
                         "state" -> result.success(toValue(runtime.state()))
                         "start" -> { runtime.start(JSONObject(args)); result.success(null) }

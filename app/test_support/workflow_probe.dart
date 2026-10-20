@@ -8,6 +8,7 @@ import 'package:media_kit/media_kit.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:focus_garden/app_controller.dart';
 import 'package:focus_garden/domain/models.dart';
+import 'package:focus_garden/domain/timer_engine.dart';
 import 'package:focus_garden/main.dart' show FocusApp;
 
 Future<void> main() async {
@@ -67,13 +68,49 @@ Future<void> main() async {
     if (saved.length != 1 || saved.single.status != 'done') {
       throw StateError('SQLite task update failed');
     }
+    c.settings = const Settings(shortBreak: 1, longBreak: 2);
+    c.completedCycle = 3;
+    await c.perform(() => c.startFocus(testSeconds: 1));
+    Future<void> waitFor(Phase phase) async {
+      final timeout = Stopwatch()..start();
+      while (c.phase != phase && timeout.elapsedMilliseconds < 8000) {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+      if (c.phase != phase) {
+        throw StateError('Expected $phase, found ${c.phase}: ${c.message}');
+      }
+    }
+
+    await waitFor(Phase.rest);
+    await Future<void>.delayed(const Duration(milliseconds: 700));
+    if (c.durationMs != 120000 ||
+        c.completedCycle != 4 ||
+        c.playing ||
+        c.message.contains('暂时')) {
+      throw StateError('Automatic long rest or focus cue failed: ${c.message}');
+    }
+    // Shorten only the isolated probe's break, without altering production settings.
+    await c.perform(() async {
+      c.engine.startRest(1, c.clock.elapsedMilliseconds);
+    });
+    await waitFor(Phase.ended);
+    await Future<void>.delayed(const Duration(milliseconds: 1200));
+    if (c.active ||
+        c.sessions.length != 1 ||
+        !c.sessions.single.completed ||
+        c.message.contains('暂时')) {
+      throw StateError('Rest cue or manual-focus waiting failed: ${c.message}');
+    }
     File('${folder.path}/result.json').writeAsStringSync(jsonEncode({
       'ok': true,
       'nativePinEnabledDisabled': true,
       'completionBellDispatched': true,
       'completedTaskLast': true,
       'taskDeletionPersisted': true,
-      'noFocusSessionsCreated': c.sessions.isEmpty,
+      'automaticLongRest': true,
+      'restEndsAndWaitsForManualFocus': true,
+      'timerCuesDispatched': true,
+      'onlyFocusRecorded': c.sessions.length == 1,
     }));
     // The host validates window styles and exits via the real tray command.
   } catch (e, stack) {
