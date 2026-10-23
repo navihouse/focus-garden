@@ -114,6 +114,51 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  testWidgets('estimate filters keyboard and pasted text and validates range',
+      (tester) async {
+    TaskItem? saved;
+    await openEditor(tester, (task) => saved = task);
+    final field = find.byKey(const ValueKey('task-estimate'));
+    await tester.ensureVisible(field);
+    for (final (input, expected) in [
+      ('abc中文１２３', ''),
+      ('-12', '12'),
+      ('1.5', '15'),
+      ('a1中2.3-4', '123'),
+      ('12345', '123'),
+      ('999', '999'),
+    ]) {
+      await tester.enterText(field, input);
+      expect(tester.widget<TextFormField>(field).controller!.text, expected);
+    }
+    // Exercise the real clipboard paste action as well as platform text entry.
+    messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'Clipboard.getData') return {'text': 'a4中5.6-7'};
+      if (call.method == 'Clipboard.hasStrings') return {'value': true};
+      return null;
+    });
+    addTearDown(() =>
+        messenger.setMockMethodCallHandler(SystemChannels.platform, null));
+    await tester.enterText(field, '');
+    final editable = tester.state<EditableTextState>(
+        find.descendant(of: field, matching: find.byType(EditableText)));
+    await editable.pasteText(SelectionChangedCause.toolbar);
+    await tester.pump();
+    expect(tester.widget<TextFormField>(field).controller!.text, '456');
+    for (final invalid in ['', '0', '000']) {
+      await tester.enterText(field, invalid);
+      await tester.tap(find.text('保存'));
+      await tester.pumpAndSettle();
+      expect(saved, isNull);
+      await tester.ensureVisible(field);
+      expect(find.text('填写 1–999'), findsOneWidget);
+    }
+    await tester.enterText(field, '999');
+    await tester.tap(find.text('保存'));
+    await tester.pumpAndSettle();
+    expect(saved!.estimate, 999);
+  });
+
   testWidgets(
       'subtask rings only on completion, saves once, and leaves parent incomplete',
       (tester) async {

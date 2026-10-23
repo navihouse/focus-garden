@@ -37,6 +37,37 @@ class ReportPeriod {
   bool isOpen(DateTime now) => beijing(now).isBefore(end);
 }
 
+String hourLabel(int hour) =>
+    '${hour.toString().padLeft(2, '0')}:00–${(hour + 1).toString().padLeft(2, '0')}:00';
+
+const interruptionStageLabels = ['前 25%', '25%–50%', '50%–75%', '最后 25%'];
+const interruptionReasonLabels = {
+  'early': '主动提前结束',
+  'sleep': '电脑睡眠',
+  'exit': '退出应用',
+  'interrupted': '异常中断',
+};
+
+class HourInvestment {
+  final int hour, milliseconds;
+  final bool tied;
+  const HourInvestment(this.hour, this.milliseconds, this.tied);
+}
+
+class SubjectActivity {
+  final String name;
+  int milliseconds = 0, completed = 0, records = 0;
+  final List<int> hourly = List.filled(24, 0);
+  SubjectActivity(this.name);
+  List<int> get peakHours {
+    final max = hourly.reduce((a, b) => a > b ? a : b);
+    return [
+      for (var h = 0; h < 24; h++)
+        if (max > 0 && hourly[h] == max) h
+    ];
+  }
+}
+
 class Report {
   final ReportPeriod period;
   int milliseconds = 0,
@@ -45,7 +76,52 @@ class Report {
       contributingSessions = 0;
   final Map<String, int> daily = {}, category = {}, tasks = {}, weekly = {};
   final List<int> hourly = List.filled(24, 0);
+  final List<int> hourlyInterruptions = List.filled(24, 0);
+  final List<int> interruptionStages = List.filled(4, 0);
+  final Map<String, int> interruptionReasons = {
+    for (final reason in interruptionReasonLabels.keys) reason: 0,
+  };
+  final Map<String, SubjectActivity> subjects = {};
+  // A record is a sample if it contributes focus time OR ends in this period.
+  int sampleCount = 0;
   Report(this.period);
+  bool get enoughSamples => sampleCount >= 5;
+  int get unclassifiedRecords => subjects['未分类']?.records ?? 0;
+  List<SubjectActivity> get topSubjects {
+    final ranked = subjects.values
+        .where((s) => s.name != '未分类' && s.completed > 0)
+        .toList()
+      ..sort((a, b) {
+        final count = b.completed.compareTo(a.completed);
+        if (count != 0) return count;
+        final time = b.milliseconds.compareTo(a.milliseconds);
+        return time != 0 ? time : a.name.compareTo(b.name);
+      });
+    return ranked.take(3).toList();
+  }
+
+  bool get hasHourVariation {
+    final positive = hourly.where((ms) => ms > 0).toSet();
+    return positive.length > 1;
+  }
+
+  List<HourInvestment> investmentHours({bool descending = true}) {
+    final hours = [
+      for (var h = 0; h < 24; h++)
+        if (hourly[h] > 0) h
+    ]..sort((a, b) {
+        final time = descending
+            ? hourly[b].compareTo(hourly[a])
+            : hourly[a].compareTo(hourly[b]);
+        return time != 0 ? time : a.compareTo(b);
+      });
+    return hours
+        .take(3)
+        .map((h) => HourInvestment(h, hourly[h],
+            hours.where((other) => hourly[other] == hourly[h]).length > 1))
+        .toList();
+  }
+
   int get count => completed + interrupted;
   double? get completionRate => count == 0 ? null : completed / count;
   double? get averageMinutes => contributingSessions == 0
@@ -64,17 +140,18 @@ class Report {
   }
 
   List<String> get advice {
-    if (count < 5) return ['目前有 $count 次记录；累计至少 5 次后提供规律建议。'];
+    if (!enoughSamples) {
+      return ['样本不足：目前有 $sampleCount 次记录；累计至少 5 次后提供规律建议。'];
+    }
     final result = <String>[];
-    if (interrupted / count >= .3) {
+    if (count >= 5 && interrupted / count >= .3) {
       result.add(
           '$count 次记录中有 $interrupted 次未完成（${(interrupted / count * 100).round()}%）；可尝试缩短单次专注时长。');
     }
-    final maximum = hourly.reduce((a, b) => a > b ? a : b);
-    if (maximum > 0) {
-      final h = hourly.indexOf(maximum);
-      result.add(
-          '投入最多的时段是 ${h.toString().padLeft(2, '0')}:00–${(h + 1).toString().padLeft(2, '0')}:00，共 ${(maximum / 60000).toStringAsFixed(1)} 分钟；可作为安排任务的参考。');
+    if (hasHourVariation) {
+      final peak = investmentHours().first;
+      result.add('投入最多的时段${peak.tied ? '之一' : ''}是 ${hourLabel(peak.hour)}，'
+          '共 ${(peak.milliseconds / 60000).toStringAsFixed(1)} 分钟；可作为安排任务的参考。');
     }
     result.add('本周期活跃 $activeDays 天，最长连续专注 $longestStreak 天。');
     return result;
@@ -85,6 +162,9 @@ Report buildReport(Iterable<FocusSession> sessions, ReportPeriod period) {
   final r = Report(period);
   final low = civilUtc(period.start), high = civilUtc(period.end);
   for (final s in sessions.where((s) => !s.excluded)) {
+    final name = s.category.trim().isEmpty ? '未分类' : s.category.trim();
+    final subject = SubjectActivity(name);
+    final endsInPeriod = !s.ended.isBefore(low) && s.ended.isBefore(high);
     int contribution = 0;
     for (final span in s.spans) {
       var cursor = span.start.isBefore(low) ? low : span.start;
@@ -101,6 +181,7 @@ Report buildReport(Iterable<FocusSession> sessions, ReportPeriod period) {
         r.daily.update(key, (v) => v + ms, ifAbsent: () => ms);
         r.weekly.update(week, (v) => v + ms, ifAbsent: () => ms);
         r.hourly[local.hour] += ms;
+        subject.hourly[local.hour] += ms;
         contribution += ms;
         cursor = end;
       }
@@ -108,17 +189,34 @@ Report buildReport(Iterable<FocusSession> sessions, ReportPeriod period) {
     r.milliseconds += contribution;
     if (contribution > 0) {
       r.contributingSessions++;
-      r.category.update(s.category, (v) => v + contribution,
-          ifAbsent: () => contribution);
+      r.category
+          .update(name, (v) => v + contribution, ifAbsent: () => contribution);
       r.tasks.update(s.taskName, (v) => v + contribution,
           ifAbsent: () => contribution);
     }
     // Ended exactly at midnight belongs to the ending date, as requested.
-    if (!s.ended.isBefore(low) && s.ended.isBefore(high)) {
+    if (endsInPeriod) {
       if (s.completed) {
         r.completed++;
+        subject.completed++;
       } else {
         r.interrupted++;
+        r.hourlyInterruptions[beijing(s.ended).hour]++;
+        final stage =
+            (s.milliseconds * 4 ~/ (s.plannedSeconds * 1000)).clamp(0, 3);
+        r.interruptionStages[stage]++;
+        r.interruptionReasons.update(s.reason, (n) => n + 1, ifAbsent: () => 1);
+      }
+    }
+    if (contribution > 0 || endsInPeriod) {
+      r.sampleCount++;
+      final aggregate =
+          r.subjects.putIfAbsent(name, () => SubjectActivity(name));
+      aggregate.records++;
+      aggregate.milliseconds += contribution;
+      aggregate.completed += subject.completed;
+      for (var h = 0; h < 24; h++) {
+        aggregate.hourly[h] += subject.hourly[h];
       }
     }
   }

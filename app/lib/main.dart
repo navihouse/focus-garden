@@ -14,6 +14,8 @@ import 'domain/models.dart';
 import 'domain/reports.dart';
 import 'domain/timer_engine.dart';
 import 'task_editor.dart';
+import 'report_charts.dart';
+import 'report_analysis.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -1220,8 +1222,11 @@ class _ReportsPageState extends State<ReportsPage> {
       if (kind == PeriodKind.year) panel('全年专注热力图', Heatmap(report)),
       panel('科目 / 项目分布', breakdown(report.category)),
       panel('任务投入', breakdown(report.tasks)),
-      panel('北京时间时段分布（分钟）',
-          BarChart({for (var h = 0; h < 24; h++) '$h时': report.hourly[h]})),
+      panel(
+          '北京时间时段分布（分钟）',
+          BarChart({for (var h = 0; h < 24; h++) '$h时': report.hourly[h]},
+              compact: true)),
+      FocusTimeAnalysis(report),
       panel(
           '基于记录的观察',
           Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1233,71 +1238,6 @@ class _ReportsPageState extends State<ReportsPage> {
                 '计时反映投入时间，不直接衡量学习效果。跨日记录按时间区间分配时长；完成数归入结束日期；平均单次按本期有投入的记录计算，只累计本期部分。')
           ])),
     ]);
-  }
-}
-
-class BarChart extends StatelessWidget {
-  final Map<String, int> values;
-  const BarChart(this.values, {super.key});
-  @override
-  Widget build(BuildContext context) {
-    if (values.isEmpty) return const Text('暂无数据');
-    final maxMs = math.max(60000, values.values.fold<int>(0, math.max));
-    return SizedBox(
-        height: 200,
-        child: LayoutBuilder(builder: (_, constraints) {
-          final width = math.max(constraints.maxWidth, values.length * 38.0);
-          return SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: SizedBox(
-                  width: width,
-                  child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: values.entries
-                          .map((e) => Expanded(
-                              child: Tooltip(
-                                  message: '${e.key}：${minutes(e.value)} 分钟',
-                                  child: Padding(
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 3),
-                                      child: Column(
-                                          mainAxisAlignment:
-                                              MainAxisAlignment.end,
-                                          children: [
-                                            if (values.length <= 12)
-                                              Text(minutes(e.value),
-                                                  style: const TextStyle(
-                                                      fontSize: 10)),
-                                            const SizedBox(height: 4),
-                                            Container(
-                                                height: math.max(
-                                                    2, e.value / maxMs * 145),
-                                                decoration: BoxDecoration(
-                                                    color: e.value == 0
-                                                        ? Theme.of(context)
-                                                            .colorScheme
-                                                            .surfaceContainerHighest
-                                                        : Theme.of(context)
-                                                            .colorScheme
-                                                            .primary
-                                                            .withValues(
-                                                                alpha: .75),
-                                                    borderRadius:
-                                                        const BorderRadius
-                                                            .vertical(
-                                                            top:
-                                                                Radius.circular(
-                                                                    4)))),
-                                            const SizedBox(height: 8),
-                                            SizedBox(
-                                                height: 28,
-                                                child: Text(e.key,
-                                                    style: const TextStyle(
-                                                        fontSize: 10),
-                                                    maxLines: 2)),
-                                          ])))))
-                          .toList())));
-        }));
   }
 }
 

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'app_controller.dart';
 import 'domain/models.dart';
 
@@ -300,8 +301,13 @@ class _TaskEditorState extends State<TaskEditor> {
                               (v?.length ?? 0) > 100 ? '最多 100 字' : null),
                       const SizedBox(height: 12),
                       TextFormField(
+                          key: const ValueKey('task-estimate'),
                           controller: estimate,
                           keyboardType: TextInputType.number,
+                          inputFormatters: [
+                            FilteringTextInputFormatter.digitsOnly,
+                            LengthLimitingTextInputFormatter(3),
+                          ],
                           decoration: const InputDecoration(labelText: '预计番茄数'),
                           validator: (v) {
                             final n = int.tryParse(v ?? '') ?? 0;
