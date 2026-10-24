@@ -27,7 +27,7 @@ findings = []
 size = 0
 for name in files:
     path = Path(name)
-    if name not in {'.gitignore', '.gitattributes', 'README.md', 'PRIVACY_CHECK.md'} and not name.startswith('app/'):
+    if name not in {'.gitignore', '.gitattributes', 'README.md', 'PRIVACY_CHECK.md', '.github/workflows/verify.yml'} and not name.startswith('app/'):
         findings.append((name, 'unreviewed root path'))
     if set(path.parts) & forbidden_parts or path.name in forbidden_names or path.suffix.lower() in forbidden_suffixes:
         findings.append((name, 'private file type or directory'))

@@ -163,6 +163,9 @@ void main() {
     expect(c.tasks.last.id, 'a');
     expect(c.tasks.last.status, 'done');
     expect(rings, 1);
+    expect(find.byKey(const ValueKey('task-card-a')), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('completed-tasks')));
+    await tester.pumpAndSettle();
     await tester.tap(field('task-menu-a'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('删除任务'));

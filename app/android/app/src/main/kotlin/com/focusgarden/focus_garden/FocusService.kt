@@ -25,6 +25,7 @@ class FocusService : Service() {
     companion object { var instance: FocusService? = null }
     private var session: MediaSession? = null
     private var wakeLock: PowerManager.WakeLock? = null
+    private var lastNotificationKey = ""
     override fun onCreate() {
         super.onCreate(); instance = this
         val runtime = FocusRuntime.get(this)
@@ -52,17 +53,28 @@ class FocusService : Service() {
     fun update() {
         val r = FocusRuntime.get(this)
         if (!r.active()) { stopForeground(STOP_FOREGROUND_REMOVE); stopSelf(); return }
-        val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val open = PendingIntent.getActivity(this, 0, Intent(this, FocusCardActivity::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         fun action(name: String) = PendingIntent.getService(this, name.hashCode(), Intent(this, FocusService::class.java).setAction(name), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val seconds = (r.remaining() + 999) / 1000
         val text = "%02d:%02d".format(seconds / 60, seconds % 60)
         val paused = r.phase == "paused"
-        val n = Notification.Builder(this, "focus_timer")
-            .setSmallIcon(android.R.drawable.ic_lock_idle_alarm).setContentTitle("${if(r.isRest) "休息" else "专注"} $text${if(paused) " · 已暂停" else ""}")
-            .setContentText(r.taskName()).setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true)
+        val elapsedSeconds = r.notificationElapsed() / 1000
+        val elapsedText = "%02d:%02d".format(elapsedSeconds / 60, elapsedSeconds % 60)
+        val key = "${r.phase}|${r.isRest}|$text|$elapsedText|${r.taskName()}|${r.player.isPlaying}"
+        if (key == lastNotificationKey) return
+        lastNotificationKey = key
+        val times = "${if(r.isRest) "已休息" else "已专注"} $elapsedText    ｜    剩余 $text"
+        // Standard BigTextStyle keeps Android 16 Live Updates eligibility.
+        // Custom RemoteViews would prevent system promotion on ColorOS/MagicOS.
+        val builder = Notification.Builder(this, "focus_timer")
+            .setSmallIcon(R.drawable.ic_focus_notification).setContentTitle("${if(r.isRest) "休息" else "专注"}${if(paused) " · 已暂停" else "进行中"}")
+            .setContentText(times).setStyle(Notification.BigTextStyle().bigText("$times\n${r.taskName()}\n点击查看专注卡片"))
+            .setShowWhen(false).setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true)
             .addAction(Notification.Action.Builder(null, if(paused) "继续计时" else "暂停计时", action(if(paused) "resume" else "pause")).build())
             .addAction(Notification.Action.Builder(null, if(r.player.isPlaying) "暂停音乐" else "播放音乐", action("music")).build())
-            .addAction(Notification.Action.Builder(null, "结束", action("end")).build()).build()
+            .addAction(Notification.Action.Builder(null, "结束", action("end")).build())
+        if (Build.VERSION.SDK_INT >= 36) builder.setRequestPromotedOngoing(!r.isRest && r.phase == "focus")
+        val n = builder.build()
         if (Build.VERSION.SDK_INT >= 34) {
             val types = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or
                 (if(r.player.isPlaying) ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK else 0)
@@ -162,6 +174,7 @@ class FocusRuntime private constructor(private val context: Context) {
     fun active() = phase == "focus" || phase == "rest" || phase == "paused"
     fun taskName(): String = base?.optString("taskName", "自由专注") ?: "下一阶段由你手动开始"
     private fun elapsed(): Long = min(plannedMs, closedMs + if(phase == "focus") max(0, tickNow() - openTick) else 0)
+    fun notificationElapsed(): Long = if(isRest) max(0, restDuration - remaining()) else elapsed()
     fun remaining(): Long = if(isRest) max(0, restLeft - if(phase == "rest") max(0, tickNow() - restTick) else 0) else max(0, plannedMs - elapsed())
     private fun orderedNow(): Long = max(now(), if(spans.length() > 0) millis(spans.getJSONObject(spans.length()-1).getString("end")) else base?.optString("started")?.let(::millis) ?: now())
     private fun closeSpan() {
@@ -307,6 +320,8 @@ class FocusRuntime private constructor(private val context: Context) {
         tick()
         return JSONObject().put("phase", phase).put("isRest", isRest).put("remainingMs", if(active()) remaining() else plannedMs)
             .put("durationMs", if(isRest) restDuration else plannedMs).put("taskName", taskName()).put("cycle", cycle)
+            .put("livePromoted", Build.VERSION.SDK_INT >= 36 && context.getSystemService(NotificationManager::class.java)
+                .activeNotifications.any { it.id == 7 && (it.notification.flags and Notification.FLAG_PROMOTED_ONGOING) != 0 })
             .put("musicPlaying", player.isPlaying).put("trackIndex", max(0, player.currentMediaItemIndex))
             .put("events", JSONArray(events.toString())).put("error", error.also { error = "" })
     }

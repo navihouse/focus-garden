@@ -5,6 +5,9 @@
 !/README.md
 !/PRIVACY_CHECK.md
 !/app/
+!/.github/
+!/.github/workflows/
+!/.github/workflows/verify.yml
 
 # Private runtime data, credentials and machine-specific configuration.
 **/.env

@@ -29,6 +29,7 @@ class TaskItem {
   final int estimate;
   final DateTime? due;
   final DateTime modified;
+  final DateTime? completedAt;
   final String notes;
   final List<SubtaskItem> subtasks;
   const TaskItem(
@@ -40,7 +41,9 @@ class TaskItem {
       this.due,
       this.notes = '',
       this.subtasks = const [],
+      this.completedAt,
       required this.modified});
+  DateTime get completionTime => completedAt ?? modified;
   Json toJson() => {
         'id': id,
         'name': name,
@@ -53,6 +56,7 @@ class TaskItem {
             ? null
             : '${due!.year}-${due!.month.toString().padLeft(2, '0')}-${due!.day.toString().padLeft(2, '0')}',
         'modified': modified.toIso8601String()
+        ,'completedAt': completedAt?.toIso8601String()
       };
   factory TaskItem.fromJson(Json j) {
     if ((j['notes'] != null && j['notes'] is! String) ||
@@ -70,6 +74,7 @@ class TaskItem {
             .map((s) => SubtaskItem.fromJson(asJson(s)))
             .toList(),
         due: j['due'] == null ? null : DateTime.parse(j['due'] as String),
+        completedAt: j['completedAt'] == null ? null : utc(j['completedAt'] as String),
         modified: utc(j['modified'] as String));
     if (t.id.isEmpty ||
         t.name.trim().isEmpty ||
@@ -197,18 +202,24 @@ class FocusSession {
 class Settings {
   final int focus, shortBreak, longBreak;
   final String theme;
+  final String? backgroundPath;
+  final double backgroundOpacity;
   final Map<String, int> goals;
   const Settings(
       {this.focus = 25,
       this.shortBreak = 5,
       this.longBreak = 15,
       this.theme = 'system',
+      this.backgroundPath,
+      this.backgroundOpacity = .2,
       this.goals = const {}});
   Json toJson() => {
         'focus': focus,
         'shortBreak': shortBreak,
         'longBreak': longBreak,
         'theme': theme,
+        'backgroundPath': backgroundPath,
+        'backgroundOpacity': backgroundOpacity,
         'goals': goals
       };
   factory Settings.fromJson(Json j) => Settings(
@@ -216,5 +227,7 @@ class Settings {
       shortBreak: j['shortBreak'] as int,
       longBreak: j['longBreak'] as int,
       theme: j['theme'] as String,
+      backgroundPath: j['backgroundPath'] as String?,
+      backgroundOpacity: ((j['backgroundOpacity'] as num?)?.toDouble() ?? .2).clamp(.05, 1),
       goals: Map<String, int>.from(j['goals'] as Map));
 }

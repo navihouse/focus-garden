@@ -33,6 +33,8 @@ class FlutterWindow : public Win32Window {
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> focus_channel_;
   bool suspend_pending_ = false;
   bool start_hidden_ = false;
+  bool music_hotkey_ = false;
+  bool timer_hotkey_ = false;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_
