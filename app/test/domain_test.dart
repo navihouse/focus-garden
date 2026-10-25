@@ -78,7 +78,7 @@ void main() {
         throwsFormatException);
   });
   test(
-      'v2 backups preserve notes and subtasks while v1 backups remain importable',
+      'v3 backups preserve task details while v1 and v2 remain importable',
       () async {
     final db = LocalStore.testing(NativeDatabase.memory());
     addTearDown(db.close);
@@ -91,11 +91,14 @@ void main() {
         ],
         modified: DateTime.utc(2026));
     final payload = exportBackup([rich], []);
-    expect(jsonDecode(payload)['version'], 2);
+    expect(jsonDecode(payload)['version'], 3);
     await importBackup(db, previewBackup(payload, [], []));
     final reopened = (await db.tasks()).single;
     expect(reopened.notes, rich.notes);
     expect(reopened.subtasks.single.completed, true);
+    final version2 = asJson(jsonDecode(payload))..['version'] = 2;
+    (version2['tasks'] as List).single.remove('completedAt');
+    expect(previewBackup(jsonEncode(version2), [], []).tasks.single.notes, rich.notes);
     final legacy = asJson(jsonDecode(exportBackup([task('legacy')], [])));
     legacy['version'] = 1;
     (legacy['tasks'] as List).single

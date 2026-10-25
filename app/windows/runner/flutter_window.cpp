@@ -36,7 +36,15 @@ bool FlutterWindow::OnCreate() {
       flutter_controller_->engine()->messenger(), "focus_garden/native",
       &flutter::StandardMethodCodec::GetInstance());
   focus_channel_->SetMethodCallHandler([this](const auto& call, auto result) {
-    if (call.method_name() == "taskCompleted") {
+    if (call.method_name() == "registerHotkeys") {
+      if (!music_hotkey_) music_hotkey_ = RegisterHotKey(GetHandle(), 4401,
+          MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, VK_SPACE) != 0;
+      if (!timer_hotkey_) timer_hotkey_ = RegisterHotKey(GetHandle(), 4402,
+          MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_SPACE) != 0;
+      result->Success(flutter::EncodableValue(flutter::EncodableMap{
+          {flutter::EncodableValue("music"), flutter::EncodableValue(music_hotkey_)},
+          {flutter::EncodableValue("timer"), flutter::EncodableValue(timer_hotkey_)}}));
+    } else if (call.method_name() == "taskCompleted") {
       if (PlayTaskCompletionSound()) result->Success();
       else result->Error("TASK_SOUND", "Could not play completion sound");
     } else if (call.method_name() == "timerSound") {
@@ -110,6 +118,8 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  if (music_hotkey_) { UnregisterHotKey(GetHandle(), 4401); music_hotkey_ = false; }
+  if (timer_hotkey_) { UnregisterHotKey(GetHandle(), 4402); timer_hotkey_ = false; }
   if (focus_channel_) {
     focus_channel_->SetMethodCallHandler(nullptr);
     focus_channel_.reset();
@@ -125,6 +135,11 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  if (message == WM_HOTKEY && focus_channel_ && (wparam == 4401 || wparam == 4402)) {
+    focus_channel_->InvokeMethod("hotkey", std::make_unique<flutter::EncodableValue>(
+        wparam == 4401 ? "music" : "timer"));
+    return 0;
+  }
   if (message == WM_POWERBROADCAST && wparam == PBT_APMSUSPEND) {
     suspend_pending_ = true;
     if (focus_channel_) focus_channel_->InvokeMethod("suspend", nullptr);

@@ -12,6 +12,8 @@ Windows 与 Android 离线番茄钟，使用 Flutter、SQLite/Drift、Windows �
 
 使用说明见 [app/README.md](app/README.md)，跨机器构建步骤见 [构建说明](app/scripts/README.md)。
 
+1.5.0 增加默认折叠的已完成任务收纳、独立完成时间倒序、自定义本机背景图片、Windows 两组全局快捷键，以及 Android 16 实时通知接入和左右计时卡片。ColorOS 16 / MagicOS 10 胶囊展示仍需真机验证，系统卡片样式由手机系统决定。
+
 本机工具、构建产物、音乐、个人记录、设备日志及私人签名材料不纳入 Git。隐私检查范围与结果见 [PRIVACY_CHECK.md](PRIVACY_CHECK.md)。
 
 1.4.0 限制预计番茄数为三位纯数字，并在周/月/年报告增加活跃与低投入时段、中断钟点与进度分布，以及完整番茄数前三科目 / 项目的逐小时投入。所有分析沿用北京时间，不足五次标注样本不足。

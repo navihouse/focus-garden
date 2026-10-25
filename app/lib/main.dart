@@ -9,6 +9,7 @@ import 'package:path/path.dart' as p;
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 import 'app_controller.dart';
+import 'app_background.dart';
 import 'data/backup.dart';
 import 'domain/models.dart';
 import 'domain/reports.dart';
@@ -174,6 +175,7 @@ class Home extends StatefulWidget {
 
 class _HomeState extends State<Home> {
   int page = 0;
+  bool taskDoneExpanded = false, focusDoneExpanded = false;
   AppController get c => widget.c;
   static const titles = ['专注', '任务', '音乐库', '历史记录', '统计报告'];
   static const icons = [
@@ -194,7 +196,10 @@ class _HomeState extends State<Home> {
       3 => HistoryPage(c),
       _ => ReportsPage(c)
     };
-    return Scaffold(
+    return AppBackground(path: c.settings.backgroundPath,
+        opacity: c.settings.backgroundOpacity,
+        child: Scaffold(
+        backgroundColor: c.settings.backgroundPath == null ? null : Colors.transparent,
         appBar: AppBar(
             title: Text(wide ? '专注花园  /  ${titles[page]}' : titles[page]),
             actions: [
@@ -254,7 +259,7 @@ class _HomeState extends State<Home> {
               ]),
             Expanded(child: body),
           ])),
-        ]));
+        ])));
   }
 
   Widget section(String title, Widget child, {String? subtitle}) => Card(
@@ -405,7 +410,17 @@ class _HomeState extends State<Home> {
             label: const Text('添加任务')),
       ]),
       if (c.tasks.isEmpty) const Text('添加任务后，可点击左侧圆环标记完成。'),
-      ...c.tasks.map(taskCard),
+      ...taskGroups(focus: true),
+      if (c.android && c.permissions['liveSupported'] == true)
+        Padding(padding: const EdgeInsets.only(top: 20), child: section('实时通知 / 灵动胶囊',
+          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(c.androidState['livePromoted'] == true ? '系统已提升本次专注通知。' :
+                c.permissions['liveEnabled'] == true ? '实时通知已允许；胶囊展示由系统决定。' : '尚未允许实时通知，请先开启通知权限及实时通知。'),
+            const Text('ColorOS 16 / MagicOS 10 可使用 Android 16 实时通知。点击计时通知查看左侧已专注、右侧剩余时间的卡片。'),
+            TextButton(onPressed: () => c.perform(() async {
+              await AppController.native.invokeMethod('requestLiveUpdates');
+            }), child: const Text('实时通知设置')),
+          ]))),
       if (c.android &&
           (c.permissions['notifications'] != true ||
               c.permissions['exact'] != true))
@@ -516,8 +531,34 @@ class _HomeState extends State<Home> {
           const Padding(
               padding: EdgeInsets.all(40),
               child: Text('还没有任务。添加一个任务，记录预计番茄数与实际投入。')),
-        ...c.tasks.map(taskCard),
+        ...taskGroups(focus: false),
       ]);
+  List<Widget> taskGroups({required bool focus}) {
+    final completed = c.tasks.where((t) => t.status == 'done').toList()
+      ..sort((a, b) {
+        final time = b.completionTime.compareTo(a.completionTime);
+        return time != 0 ? time : a.id.compareTo(b.id);
+      });
+    final expanded = focus ? focusDoneExpanded : taskDoneExpanded;
+    return [
+      ...c.tasks.where((t) => t.status != 'done').map(taskCard),
+      if (completed.isNotEmpty) ...[
+        const Divider(),
+        Align(alignment: Alignment.centerLeft, child: TextButton.icon(
+          key: ValueKey(focus ? 'completed-focus' : 'completed-tasks'),
+          style: TextButton.styleFrom(backgroundColor: Theme.of(context).colorScheme.surfaceContainerHigh),
+          onPressed: () => setState(() {
+            if (focus) { focusDoneExpanded = !focusDoneExpanded; }
+            else { taskDoneExpanded = !taskDoneExpanded; }
+          }),
+          icon: Icon(expanded ? Icons.expand_more : Icons.chevron_right, size: 18),
+          label: Text('已完成 ${completed.length}'),
+        )),
+        const SizedBox(height: 10),
+        if (expanded) ...completed.map(taskCard),
+      ],
+    ];
+  }
   Widget taskCard(TaskItem t) {
     final records = c.sessions.where((s) => s.taskId == t.id && !s.excluded);
     return Padding(
@@ -681,6 +722,12 @@ class _HomeState extends State<Home> {
             text: c.settings.goals[kind.name]?.toString() ?? '')
     };
     String theme = c.settings.theme;
+    String? background = c.settings.backgroundPath;
+    double backgroundOpacity = c.settings.backgroundOpacity;
+    final stagedBackgrounds = <String>{};
+    bool importingBackground = false;
+    bool dialogClosed = false;
+    String? backgroundError;
     bool launchAtLogin = c.startupEnabled;
     final route = DialogRoute<bool>(
         context: context,
@@ -735,9 +782,58 @@ class _HomeState extends State<Home> {
                                                 child: Text('深色'))
                                           ],
                                           onChanged: (v) => theme = v!),
+                                      const SizedBox(height: 16),
+                                      const Align(alignment: Alignment.centerLeft, child: Text('自定义背景')),
+                                      if (background != null) Padding(
+                                        padding: const EdgeInsets.symmetric(vertical: 10),
+                                        child: ClipRRect(borderRadius: BorderRadius.circular(10),
+                                          child: SizedBox(height: 120, width: double.infinity,
+                                            child: Image.file(File(background!), fit: BoxFit.cover, cacheWidth: 600,
+                                              errorBuilder: (_, error, stack) => const Center(child: Text('图片不可用，请重新选择'))))),
+                                      ),
+                                      Wrap(spacing: 8, children: [
+                                        OutlinedButton.icon(
+                                          key: const ValueKey('choose-background'),
+                                          onPressed: importingBackground ? null : () async {
+                                            update(() { importingBackground = true; backgroundError = null; });
+                                            try {
+                                              final files = await FilePicker.platform.pickFiles(type: FileType.custom,
+                                                allowedExtensions: ['jpg', 'jpeg', 'png', 'webp']);
+                                              final source = files?.files.single.path;
+                                              if (source != null) {
+                                                final path = await c.importBackground(source);
+                                                if (dialogClosed || !ctx.mounted) {
+                                                  await c.discardUnusedBackground(path);
+                                                  return;
+                                                }
+                                                stagedBackgrounds.add(path);
+                                                if (ctx.mounted) update(() => background = path);
+                                              }
+                                            } catch (_) {
+                                              if (ctx.mounted) update(() => backgroundError = '图片导入失败，请选择 20 MB 以内的静态 JPG、PNG 或 WebP 图片。');
+                                            } finally {
+                                              if (ctx.mounted) update(() => importingBackground = false);
+                                            }
+                                          }, icon: const Icon(Icons.add_photo_alternate_outlined),
+                                          label: Text(importingBackground ? '正在处理图片…' : '选择背景图片')),
+                                        if (background != null) TextButton(
+                                          key: const ValueKey('remove-background'),
+                                          onPressed: importingBackground ? null : () => update(() => background = null), child: const Text('移除背景')),
+                                      ]),
+                                      if (backgroundError != null) Text(backgroundError!, style: TextStyle(color: Theme.of(ctx).colorScheme.error)),
+                                      if (background != null) ...[
+                                        Text('图片可见度 ${(backgroundOpacity * 100).round()}%'),
+                                        Slider(key: const ValueKey('background-opacity'), value: backgroundOpacity,
+                                          min: .05, max: 1, onChanged: (v) => update(() => backgroundOpacity = v)),
+                                      ],
+                                      const Text('图片保存在本机，不随任务备份传输；点击保存后生效。'),
                                       if (Platform.isWindows) ...[
                                         const SizedBox(height: 20),
                                         const Divider(),
+                                        const Text('全局快捷键（窗口最小化或在托盘时也有效）'),
+                                        Text('Ctrl + Shift + 空格：播放 / 暂停音乐${c.hotkeyStatus['music'] == false ? '（被其他程序占用）' : ''}'),
+                                        Text('Ctrl + Alt + 空格：暂停 / 继续当前番茄钟${c.hotkeyStatus['timer'] == false ? '（被其他程序占用）' : ''}'),
+                                        const Text('计时快捷键不会从待机状态自动开始新番茄钟。'),
                                         SwitchListTile.adaptive(
                                             key: const ValueKey(
                                                 'launch-at-login'),
@@ -800,7 +896,7 @@ class _HomeState extends State<Home> {
                           onPressed: () => Navigator.pop(ctx, false),
                           child: const Text('取消')),
                       FilledButton(
-                          onPressed: () {
+                          onPressed: importingBackground ? null : () {
                             if (form.currentState!.validate()) {
                               Navigator.pop(ctx, true);
                             }
@@ -808,6 +904,7 @@ class _HomeState extends State<Home> {
                           child: const Text('保存'))
                     ])));
     final result = await Navigator.of(context, rootNavigator: true).push(route);
+    dialogClosed = true;
     if (result == true) {
       await c.perform(() async {
         await c.saveSettings(Settings(
@@ -815,6 +912,8 @@ class _HomeState extends State<Home> {
             shortBreak: int.parse(short.text),
             longBreak: int.parse(long.text),
             theme: theme,
+            backgroundPath: background,
+            backgroundOpacity: backgroundOpacity,
             goals: {
               for (final e in goals.entries)
                 if (e.value.text.isNotEmpty) e.key: int.parse(e.value.text)
@@ -826,6 +925,9 @@ class _HomeState extends State<Home> {
           await c.setLaunchAtLogin(launchAtLogin);
         }
       });
+    }
+    for (final path in stagedBackgrounds) {
+      await c.discardUnusedBackground(path);
     }
     // Popping completes push() before the closing animation removes the form.
     // Keep controllers alive until the route has actually left the overlay.

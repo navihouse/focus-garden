@@ -16,7 +16,7 @@ class BackupPreview {
 String exportBackup(List<TaskItem> tasks, List<FocusSession> sessions) =>
     const JsonEncoder.withIndent('  ').convert({
       'format': 'focus-garden',
-      'version': 2,
+      'version': 3,
       'exportedAt': DateTime.now().toUtc().toIso8601String(),
       'tasks': tasks.map((t) => t.toJson()).toList(),
       'sessions': sessions.map((s) => s.toJson()).toList()
@@ -28,7 +28,7 @@ BackupPreview previewBackup(String text, List<TaskItem> existingTasks,
     throw const FormatException('备份超过 50 MB 限制');
   }
   final j = asJson(jsonDecode(text));
-  if (j['format'] != 'focus-garden' || ![1, 2].contains(j['version'])) {
+  if (j['format'] != 'focus-garden' || ![1, 2, 3].contains(j['version'])) {
     throw const FormatException('不支持的备份格式或版本');
   }
   utc(j['exportedAt'] as String);

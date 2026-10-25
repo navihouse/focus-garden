@@ -96,6 +96,7 @@ class _TaskEditorState extends State<TaskEditor> {
       status: status,
       due: due,
       notes: notes.text,
+      completedAt: widget.task?.completedAt,
       subtasks: subtasks
           .map((s) => SubtaskItem(
               id: s.id, name: s.name.text.trim(), completed: s.completed))

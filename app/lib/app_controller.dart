@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
+import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
@@ -43,6 +45,7 @@ class AppController extends ChangeNotifier {
       startupCurrentPath = false,
       startMenuAvailable = false;
   String repeat = 'all';
+  Map<String, dynamic> hotkeyStatus = {};
   double volume = .6;
   int trackIndex = 0;
   Json androidState = {}, permissions = {};
@@ -135,6 +138,8 @@ class AppController extends ChangeNotifier {
       native.setMethodCallHandler((call) async {
         if (call.method == 'suspend') {
           await perform(() => end(reason: 'sleep', useCheckpoint: true));
+        } else if (call.method == 'hotkey') {
+          await perform(() => handleHotkey(call.arguments as String));
         }
       });
       if (Platform.isWindows) {
@@ -144,6 +149,10 @@ class AppController extends ChangeNotifier {
             await native.invokeMethod('createStartMenuShortcut');
           }
           await refreshDesktopIntegration();
+          hotkeyStatus = asJson(await native.invokeMethod('registerHotkeys'));
+          if (hotkeyStatus['music'] != true || hotkeyStatus['timer'] != true) {
+            message = '部分全局快捷键被其他程序占用，请在设置中查看。';
+          }
         } catch (e) {
           message = 'Windows 启动设置未完成，可在设置中重试：$e';
         }
@@ -178,9 +187,9 @@ class AppController extends ChangeNotifier {
       final group =
           (a.status == 'done' ? 1 : 0).compareTo(b.status == 'done' ? 1 : 0);
       if (group != 0) return group;
-      // New completions go to the very bottom, including after older ones.
+      // Completed tasks live in a folded group, newest completion first.
       final time = a.status == 'done'
-          ? a.modified.compareTo(b.modified)
+          ? b.completionTime.compareTo(a.completionTime)
           : b.modified.compareTo(a.modified);
       return time != 0 ? time : a.id.compareTo(b.id);
     });
@@ -202,7 +211,11 @@ class AppController extends ChangeNotifier {
     if (task.status == 'done' && previous?.status != 'done') {
       throw StateError('请点击任务左侧圆环完成任务');
     }
-    await store.task(task);
+    await store.task(TaskItem.fromJson({...task.toJson(),
+      'completedAt': task.status == 'done'
+          ? (previous?.completionTime ?? task.completionTime).toIso8601String()
+          : null,
+    }));
     await refresh();
   }
 
@@ -213,6 +226,7 @@ class AppController extends ChangeNotifier {
     await store.task(TaskItem.fromJson({
       ...task.toJson(),
       'status': done ? 'done' : 'todo',
+      'completedAt': done ? DateTime.now().toUtc().toIso8601String() : null,
       'modified': DateTime.now().toUtc().toIso8601String(),
     }));
     if (done && selectedTask == id && !active) selectedTask = null;
@@ -367,6 +381,7 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> pauseResume() async {
+    if (!active) return;
     if (android) {
       await native.invokeMethod(phase == Phase.paused ? 'resume' : 'pause');
       await pollAndroid();
@@ -377,7 +392,7 @@ class AppController extends ChangeNotifier {
       if (!isRest && !muted && tracks.isNotEmpty) await player!.play();
     } else {
       engine.pause(DateTime.now().toUtc(), clock.elapsedMilliseconds);
-      await player!.pause();
+      await player?.pause();
     }
     final s =
         engine.snapshot(DateTime.now().toUtc(), clock.elapsedMilliseconds);
@@ -433,10 +448,52 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> saveSettings(Settings value) async {
+    final oldBackground = settings.backgroundPath;
     settings = value;
     await store.put('settings', value.toJson());
     if (android) await native.invokeMethod('timerSettings', _breakSettings);
     notifyListeners();
+    await discardUnusedBackground(oldBackground);
+  }
+
+  Future<void> handleHotkey(String action) async {
+    if (action == 'music') await music('toggle');
+    if (action == 'timer' && active) await pauseResume();
+  }
+
+  Future<String> importBackground(String source) async {
+    final file = File(source);
+    if (await file.length() > 20 * 1024 * 1024) {
+      throw const FormatException('背景图片不能超过 20 MB');
+    }
+    final buffer = await ui.ImmutableBuffer.fromUint8List(await file.readAsBytes());
+    ui.ImageDescriptor? descriptor;
+    ui.Codec? codec;
+    ui.Image? image;
+    try {
+      descriptor = await ui.ImageDescriptor.encoded(buffer);
+      final scale = math.min(1.0, 2560 / math.max(descriptor.width, descriptor.height));
+      codec = await descriptor.instantiateCodec(
+          targetWidth: math.max(1, (descriptor.width * scale).round()),
+          targetHeight: math.max(1, (descriptor.height * scale).round()));
+      if (codec.frameCount != 1) throw const FormatException('请选择静态图片');
+      image = (await codec.getNextFrame()).image;
+      final data = await image.toByteData(format: ui.ImageByteFormat.png);
+      if (data == null) throw const FormatException('无法读取图片');
+      final folder = Directory(p.join(dataDirectory.path, 'backgrounds'));
+      await folder.create(recursive: true);
+      final destination = File(p.join(folder.path, '${uuid.v4()}.png'));
+      await destination.writeAsBytes(data.buffer.asUint8List(), flush: true);
+      return destination.path;
+    } finally {
+      image?.dispose(); codec?.dispose(); descriptor?.dispose(); buffer.dispose();
+    }
+  }
+
+  Future<void> discardUnusedBackground(String? path) async {
+    if (path == null || path == settings.backgroundPath) return;
+    if (p.dirname(p.normalize(path)) != p.join(dataDirectory.path, 'backgrounds')) return;
+    try { await File(path).delete(); } catch (_) { /* A cached file may still be in use. */ }
   }
 
   Future<void> saveTracks() async {

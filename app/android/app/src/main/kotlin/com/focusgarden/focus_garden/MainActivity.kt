@@ -2,6 +2,7 @@ package com.focusgarden.focus_garden
 
 import android.Manifest
 import android.app.AlarmManager
+import android.app.NotificationManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -39,7 +40,19 @@ class MainActivity : FlutterActivity() {
                         "permissions" -> result.success(mapOf(
                             "notifications" to (Build.VERSION.SDK_INT < 33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED),
                             "exact" to (Build.VERSION.SDK_INT < 31 || getSystemService(AlarmManager::class.java).canScheduleExactAlarms())
+                            ,"liveSupported" to (Build.VERSION.SDK_INT >= 36)
+                            ,"liveEnabled" to (Build.VERSION.SDK_INT >= 36 && getSystemService(NotificationManager::class.java).canPostPromotedNotifications())
                         ))
+                        "requestLiveUpdates" -> {
+                            if (Build.VERSION.SDK_INT >= 36) {
+                                val promoted = Intent(Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS)
+                                    .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                                val fallback = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                                    .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                                startActivity(if(promoted.resolveActivity(packageManager) != null) promoted else fallback)
+                            }
+                            result.success(null)
+                        }
                         "requestPermissions" -> {
                             if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                                 requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 77)

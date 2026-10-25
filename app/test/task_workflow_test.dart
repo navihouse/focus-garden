@@ -37,16 +37,16 @@ void main() {
         .setMockMethodCallHandler(AppController.native, null);
   });
 
-  test('completion goes after older completions, persists, and rings only once',
+  test('completion goes before older completions, persists, and rings only once',
       () async {
     c.selectedTask = 'a';
     await c.toggleTaskCompleted('a');
-    expect(c.tasks.map((t) => t.id), ['b', 'old', 'a']);
-    expect(c.tasks.last.status, 'done');
+    expect(c.tasks.map((t) => t.id), ['b', 'a', 'old']);
+    expect(c.tasks[1].status, 'done');
     expect(c.selectedTask, isNull);
     expect(sounds, ['taskCompleted']);
     await c.refresh();
-    expect(c.tasks.last.id, 'a');
+    expect(c.tasks[1].id, 'a');
     await c.toggleTaskCompleted('a');
     expect(c.tasks.first.id, 'a');
     expect(c.tasks.first.status, 'todo');

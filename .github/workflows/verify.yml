@@ -1,0 +1,67 @@
+name: Verify desktop and Android
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.7'
+          channel: stable
+          cache: true
+      - name: Check tracked files for private data
+        run: python app/scripts/check-privacy.py
+      - name: Resolve dependencies
+        working-directory: app
+        run: flutter pub get
+      - name: Analyze
+        working-directory: app
+        run: flutter analyze --no-fatal-infos
+      - name: Tests
+        working-directory: app
+        run: flutter test --reporter expanded
+      - name: Build production Windows app
+        working-directory: app
+        run: flutter build windows --release --target lib/main.dart
+      - name: Bundle portable runtime
+        shell: pwsh
+        run: |
+          $release = 'app/build/windows/x64/runner/Release'
+          $vs = & "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe" -latest -property installationPath
+          Get-ChildItem "$vs/VC/Redist/MSVC/*/x64/Microsoft.VC*.CRT/*.dll" | Copy-Item -Destination $release
+          Remove-Item -LiteralPath "$release/native_assets.json" -ErrorAction SilentlyContinue
+          Copy-Item app/README.md "$release/使用说明.md"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FocusGarden-1.5.0-Windows-x64
+          path: app/build/windows/x64/runner/Release/
+          retention-days: 14
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.7'
+          channel: stable
+          cache: true
+      - name: Resolve dependencies
+        working-directory: app
+        run: flutter pub get
+      - name: Build production APK without private signing keys
+        working-directory: app
+        run: flutter build apk --release --target lib/main.dart
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FocusGarden-1.5.0-Android-unsigned
+          path: app/build/app/outputs/flutter-apk/*.apk
+          retention-days: 14
