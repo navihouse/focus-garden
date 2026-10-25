@@ -96,7 +96,7 @@ void main() {
       row('long', '2026-10-19T02:00:00Z',
           seconds: 900, planned: 3600, reason: 'early'),
     ], week);
-    expect(r.interruptionStages, [2, 3, 2, 2]);
+    expect(r.interruptionStages, [1, 3, 2, 2]); // Zero focus is invalid.
   });
 
   test('paused time never increases focus or interruption progress', () {

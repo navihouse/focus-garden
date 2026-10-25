@@ -22,3 +22,5 @@ Android：创建自己的签名密钥，在 `android/key.properties` 中配置 `
 `test_support/workflow_probe.dart` 配合 `verify-workflow.py <probe.exe> <空结果目录>` 验证 Windows 原生置顶、任务提示音、完成置底、删除保存及托盘退出。1.3.0 增加实际短计时验证：第四次完成自动长休息、休息结束等待手动开始、两种到点提示音，确认只保存专注记录。全程使用独立数据库。`package-release.py` 将桌面产物放在 `releases/FocusGarden-<版本>-Windows-x64/FocusGarden-Windows-x64/`，避免覆盖仍在运行的旧版文件。
 
 1.3.1 的原生验证还会打开任务详情、勾选子任务、检查音效错误、请求滚动至日期并验证名称位置，最后点击保存并核对结果。截图与结果写入指定空结果目录，不使用个人数据库。
+
+1.6.0 新增 `test_support/settings_probe.dart`，配合 `verify-custom-shortcuts.py <probe.exe> <空结果目录>` 验证真实全局快捷键触发、音乐 / 计时分离、占用时回滚、变更后释放旧组合键，以及本机设置持久化。仅在显式指定隔离环境时运行，不使用正式数据或修改开始菜单。测试组合键为 Ctrl+Shift/Alt+F9、F10，占用测试仅在验证进程中注册并释放。测试入口构建后必须重新构建 `lib/main.dart`，再生成正式发布包。

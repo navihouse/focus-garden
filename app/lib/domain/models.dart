@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'hotkey.dart';
 
 typedef Json = Map<String, dynamic>;
 
@@ -55,8 +56,8 @@ class TaskItem {
         'due': due == null
             ? null
             : '${due!.year}-${due!.month.toString().padLeft(2, '0')}-${due!.day.toString().padLeft(2, '0')}',
-        'modified': modified.toIso8601String()
-        ,'completedAt': completedAt?.toIso8601String()
+        'modified': modified.toIso8601String(),
+        'completedAt': completedAt?.toIso8601String()
       };
   factory TaskItem.fromJson(Json j) {
     if ((j['notes'] != null && j['notes'] is! String) ||
@@ -74,7 +75,8 @@ class TaskItem {
             .map((s) => SubtaskItem.fromJson(asJson(s)))
             .toList(),
         due: j['due'] == null ? null : DateTime.parse(j['due'] as String),
-        completedAt: j['completedAt'] == null ? null : utc(j['completedAt'] as String),
+        completedAt:
+            j['completedAt'] == null ? null : utc(j['completedAt'] as String),
         modified: utc(j['modified'] as String));
     if (t.id.isEmpty ||
         t.name.trim().isEmpty ||
@@ -129,6 +131,12 @@ class FocusSession {
       this.excluded = false,
       this.reason = 'interrupted'});
   int get milliseconds => spans.fold(0, (sum, s) => sum + s.milliseconds);
+
+  /// Evaluate the entire session before clipping it to a report period.
+  /// Pauses and rests are not present in these focus spans.
+  bool get isValidFocus => milliseconds >= 60000;
+  bool get includedInStatistics => isValidFocus && !excluded;
+  bool get countsAsPomodoro => completed && includedInStatistics;
   FocusSession withExcluded(bool value) =>
       FocusSession.fromJson({...toJson(), 'excluded': value});
   Json toJson() => {
@@ -204,6 +212,8 @@ class Settings {
   final String theme;
   final String? backgroundPath;
   final double backgroundOpacity;
+  final double cardTransparency;
+  final HotkeyBinding musicHotkey, timerHotkey;
   final Map<String, int> goals;
   const Settings(
       {this.focus = 25,
@@ -212,6 +222,9 @@ class Settings {
       this.theme = 'system',
       this.backgroundPath,
       this.backgroundOpacity = .2,
+      this.cardTransparency = .65,
+      this.musicHotkey = HotkeyBinding.musicDefault,
+      this.timerHotkey = HotkeyBinding.timerDefault,
       this.goals = const {}});
   Json toJson() => {
         'focus': focus,
@@ -220,6 +233,9 @@ class Settings {
         'theme': theme,
         'backgroundPath': backgroundPath,
         'backgroundOpacity': backgroundOpacity,
+        'cardTransparency': cardTransparency,
+        'musicHotkey': musicHotkey.toJson(),
+        'timerHotkey': timerHotkey.toJson(),
         'goals': goals
       };
   factory Settings.fromJson(Json j) => Settings(
@@ -228,6 +244,15 @@ class Settings {
       longBreak: j['longBreak'] as int,
       theme: j['theme'] as String,
       backgroundPath: j['backgroundPath'] as String?,
-      backgroundOpacity: ((j['backgroundOpacity'] as num?)?.toDouble() ?? .2).clamp(.05, 1.0).toDouble(),
+      backgroundOpacity: ((j['backgroundOpacity'] as num?)?.toDouble() ?? .2)
+          .clamp(.05, 1.0)
+          .toDouble(),
+      cardTransparency: ((j['cardTransparency'] as num?)?.toDouble() ?? .65)
+          .clamp(0, 1)
+          .toDouble(),
+      musicHotkey:
+          HotkeyBinding.fromJson(j['musicHotkey'], HotkeyBinding.musicDefault),
+      timerHotkey:
+          HotkeyBinding.fromJson(j['timerHotkey'], HotkeyBinding.timerDefault),
       goals: Map<String, int>.from(j['goals'] as Map));
 }

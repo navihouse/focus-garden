@@ -10,6 +10,8 @@ import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 import 'app_controller.dart';
 import 'app_background.dart';
+import 'hotkey_editor.dart';
+import 'domain/hotkey.dart';
 import 'data/backup.dart';
 import 'domain/models.dart';
 import 'domain/reports.dart';
@@ -196,70 +198,73 @@ class _HomeState extends State<Home> {
       3 => HistoryPage(c),
       _ => ReportsPage(c)
     };
-    return AppBackground(path: c.settings.backgroundPath,
+    return AppBackground(
+        path: c.settings.backgroundPath,
         opacity: c.settings.backgroundOpacity,
+        cardTransparency: c.settings.cardTransparency,
         child: Scaffold(
-        backgroundColor: c.settings.backgroundPath == null ? null : Colors.transparent,
-        appBar: AppBar(
-            title: Text(wide ? '专注花园  /  ${titles[page]}' : titles[page]),
-            actions: [
-              if (Platform.isWindows && (page == 0 || pinned))
-                IconButton(
-                    key: const ValueKey('focus-pin'),
-                    tooltip: pinned ? '取消专注置顶' : '专注置顶',
-                    isSelected: pinned,
-                    icon: const Icon(Icons.push_pin_outlined),
-                    selectedIcon: const Icon(Icons.push_pin),
-                    onPressed: () =>
-                        c.perform(() => c.setFocusPinned(!c.focusPinned))),
-              if (!pinned) ...[
-                IconButton(
-                    tooltip: '备份与合并',
-                    onPressed: backupDialog,
-                    icon: const Icon(Icons.import_export)),
-                IconButton(
-                    tooltip: '设置',
-                    onPressed: settingsDialog,
-                    icon: const Icon(Icons.tune)),
-              ],
-              const SizedBox(width: 12)
-            ]),
-        bottomNavigationBar: wide || pinned
-            ? null
-            : NavigationBar(
-                selectedIndex: page,
-                onDestinationSelected: (v) => setState(() => page = v),
-                destinations: List.generate(
-                    5,
-                    (i) => NavigationDestination(
-                        icon: Icon(icons[i]), label: titles[i]))),
-        body: Row(children: [
-          if (wide && !pinned)
-            NavigationRail(
-                selectedIndex: page,
-                labelType: NavigationRailLabelType.all,
-                onDestinationSelected: (v) => setState(() => page = v),
-                destinations: List.generate(
-                    5,
-                    (i) => NavigationRailDestination(
-                        icon: Icon(icons[i]), label: Text(titles[i])))),
-          Expanded(
-              child: Column(children: [
-            if (c.message.isNotEmpty)
-              MaterialBanner(content: Text(c.message), actions: [
-                TextButton(
-                    onPressed: () => setState(() => c.message = ''),
-                    child: const Text('知道了'))
-              ]),
-            if (c.recoveryMessage.isNotEmpty)
-              MaterialBanner(content: Text(c.recoveryMessage), actions: [
-                TextButton(
-                    onPressed: () => setState(() => c.recoveryMessage = ''),
-                    child: const Text('知道了'))
-              ]),
-            Expanded(child: body),
-          ])),
-        ])));
+            backgroundColor:
+                c.settings.backgroundPath == null ? null : Colors.transparent,
+            appBar: AppBar(
+                title: Text(wide ? '专注花园  /  ${titles[page]}' : titles[page]),
+                actions: [
+                  if (Platform.isWindows && (page == 0 || pinned))
+                    IconButton(
+                        key: const ValueKey('focus-pin'),
+                        tooltip: pinned ? '取消专注置顶' : '专注置顶',
+                        isSelected: pinned,
+                        icon: const Icon(Icons.push_pin_outlined),
+                        selectedIcon: const Icon(Icons.push_pin),
+                        onPressed: () =>
+                            c.perform(() => c.setFocusPinned(!c.focusPinned))),
+                  if (!pinned) ...[
+                    IconButton(
+                        tooltip: '备份与合并',
+                        onPressed: backupDialog,
+                        icon: const Icon(Icons.import_export)),
+                    IconButton(
+                        tooltip: '设置',
+                        onPressed: settingsDialog,
+                        icon: const Icon(Icons.tune)),
+                  ],
+                  const SizedBox(width: 12)
+                ]),
+            bottomNavigationBar: wide || pinned
+                ? null
+                : NavigationBar(
+                    selectedIndex: page,
+                    onDestinationSelected: (v) => setState(() => page = v),
+                    destinations: List.generate(
+                        5,
+                        (i) => NavigationDestination(
+                            icon: Icon(icons[i]), label: titles[i]))),
+            body: Row(children: [
+              if (wide && !pinned)
+                NavigationRail(
+                    selectedIndex: page,
+                    labelType: NavigationRailLabelType.all,
+                    onDestinationSelected: (v) => setState(() => page = v),
+                    destinations: List.generate(
+                        5,
+                        (i) => NavigationRailDestination(
+                            icon: Icon(icons[i]), label: Text(titles[i])))),
+              Expanded(
+                  child: Column(children: [
+                if (c.message.isNotEmpty)
+                  MaterialBanner(content: Text(c.message), actions: [
+                    TextButton(
+                        onPressed: () => setState(() => c.message = ''),
+                        child: const Text('知道了'))
+                  ]),
+                if (c.recoveryMessage.isNotEmpty)
+                  MaterialBanner(content: Text(c.recoveryMessage), actions: [
+                    TextButton(
+                        onPressed: () => setState(() => c.recoveryMessage = ''),
+                        child: const Text('知道了'))
+                  ]),
+                Expanded(child: body),
+              ])),
+            ])));
   }
 
   Widget section(String title, Widget child, {String? subtitle}) => Card(
@@ -412,15 +417,25 @@ class _HomeState extends State<Home> {
       if (c.tasks.isEmpty) const Text('添加任务后，可点击左侧圆环标记完成。'),
       ...taskGroups(focus: true),
       if (c.android && c.permissions['liveSupported'] == true)
-        Padding(padding: const EdgeInsets.only(top: 20), child: section('实时通知 / 灵动胶囊',
-          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(c.androidState['livePromoted'] == true ? '系统已提升本次专注通知。' :
-                c.permissions['liveEnabled'] == true ? '实时通知已允许；胶囊展示由系统决定。' : '尚未允许实时通知，请先开启通知权限及实时通知。'),
-            const Text('ColorOS 16 / MagicOS 10 可使用 Android 16 实时通知。点击计时通知查看左侧已专注、右侧剩余时间的卡片。'),
-            TextButton(onPressed: () => c.perform(() async {
-              await AppController.native.invokeMethod('requestLiveUpdates');
-            }), child: const Text('实时通知设置')),
-          ]))),
+        Padding(
+            padding: const EdgeInsets.only(top: 20),
+            child: section(
+                '实时通知 / 灵动胶囊',
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(c.androidState['livePromoted'] == true
+                      ? '系统已提升本次专注通知。'
+                      : c.permissions['liveEnabled'] == true
+                          ? '实时通知已允许；胶囊展示由系统决定。'
+                          : '尚未允许实时通知，请先开启通知权限及实时通知。'),
+                  const Text(
+                      'ColorOS 16 / MagicOS 10 可使用 Android 16 实时通知。点击计时通知查看左侧已专注、右侧剩余时间的卡片。'),
+                  TextButton(
+                      onPressed: () => c.perform(() async {
+                            await AppController.native
+                                .invokeMethod('requestLiveUpdates');
+                          }),
+                      child: const Text('实时通知设置')),
+                ]))),
       if (c.android &&
           (c.permissions['notifications'] != true ||
               c.permissions['exact'] != true))
@@ -544,23 +559,33 @@ class _HomeState extends State<Home> {
       ...c.tasks.where((t) => t.status != 'done').map(taskCard),
       if (completed.isNotEmpty) ...[
         const Divider(),
-        Align(alignment: Alignment.centerLeft, child: TextButton.icon(
-          key: ValueKey(focus ? 'completed-focus' : 'completed-tasks'),
-          style: TextButton.styleFrom(backgroundColor: Theme.of(context).colorScheme.surfaceContainerHigh),
-          onPressed: () => setState(() {
-            if (focus) { focusDoneExpanded = !focusDoneExpanded; }
-            else { taskDoneExpanded = !taskDoneExpanded; }
-          }),
-          icon: Icon(expanded ? Icons.expand_more : Icons.chevron_right, size: 18),
-          label: Text('已完成 ${completed.length}'),
-        )),
+        Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              key: ValueKey(focus ? 'completed-focus' : 'completed-tasks'),
+              style: TextButton.styleFrom(
+                  backgroundColor:
+                      Theme.of(context).colorScheme.surfaceContainerHigh),
+              onPressed: () => setState(() {
+                if (focus) {
+                  focusDoneExpanded = !focusDoneExpanded;
+                } else {
+                  taskDoneExpanded = !taskDoneExpanded;
+                }
+              }),
+              icon: Icon(expanded ? Icons.expand_more : Icons.chevron_right,
+                  size: 18),
+              label: Text('已完成 ${completed.length}'),
+            )),
         const SizedBox(height: 10),
         if (expanded) ...completed.map(taskCard),
       ],
     ];
   }
+
   Widget taskCard(TaskItem t) {
-    final records = c.sessions.where((s) => s.taskId == t.id && !s.excluded);
+    final records =
+        c.sessions.where((s) => s.taskId == t.id && s.includedInStatistics);
     return Padding(
         key: ValueKey('task-card-${t.id}'),
         padding: const EdgeInsets.only(bottom: 12),
@@ -724,16 +749,38 @@ class _HomeState extends State<Home> {
     String theme = c.settings.theme;
     String? background = c.settings.backgroundPath;
     double backgroundOpacity = c.settings.backgroundOpacity;
+    double cardTransparency = c.settings.cardTransparency;
+    HotkeyBinding musicHotkey = c.settings.musicHotkey,
+        timerHotkey = c.settings.timerHotkey;
     final stagedBackgrounds = <String>{};
     bool importingBackground = false;
     bool dialogClosed = false;
     String? backgroundError;
+    String? saveError;
+    bool savingSettings = false;
     bool launchAtLogin = c.startupEnabled;
     final route = DialogRoute<bool>(
         context: context,
+        barrierDismissible: false,
         builder: (ctx) => StatefulBuilder(
-            builder: (ctx, update) => AlertDialog(
-                    title: const Text('专注设置'),
+            builder: (ctx, update) => PopScope(
+                canPop: !savingSettings,
+                child: AlertDialog(
+                    title: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('专注设置'),
+                          if (saveError != null)
+                            Padding(
+                                padding: const EdgeInsets.only(top: 8),
+                                child: Text(saveError!,
+                                    key: const ValueKey('settings-error'),
+                                    style: TextStyle(
+                                        fontSize: 14,
+                                        color:
+                                            Theme.of(ctx).colorScheme.error))),
+                        ]),
                     content: SizedBox(
                         width: 430,
                         child: SingleChildScrollView(
@@ -783,56 +830,192 @@ class _HomeState extends State<Home> {
                                           ],
                                           onChanged: (v) => theme = v!),
                                       const SizedBox(height: 16),
-                                      const Align(alignment: Alignment.centerLeft, child: Text('自定义背景')),
-                                      if (background != null) Padding(
-                                        padding: const EdgeInsets.symmetric(vertical: 10),
-                                        child: ClipRRect(borderRadius: BorderRadius.circular(10),
-                                          child: SizedBox(height: 120, width: double.infinity,
-                                            child: Image.file(File(background!), fit: BoxFit.cover, cacheWidth: 600,
-                                              errorBuilder: (_, error, stack) => const Center(child: Text('图片不可用，请重新选择'))))),
-                                      ),
+                                      const Align(
+                                          alignment: Alignment.centerLeft,
+                                          child: Text('自定义背景')),
+                                      if (background != null)
+                                        Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                              vertical: 10),
+                                          child: ClipRRect(
+                                              borderRadius:
+                                                  BorderRadius.circular(10),
+                                              child: SizedBox(
+                                                  height: 120,
+                                                  width: double.infinity,
+                                                  child: Image.file(
+                                                      File(background!),
+                                                      fit: BoxFit.cover,
+                                                      cacheWidth: 600,
+                                                      errorBuilder: (_, error,
+                                                              stack) =>
+                                                          const Center(
+                                                              child: Text(
+                                                                  '图片不可用，请重新选择'))))),
+                                        ),
                                       Wrap(spacing: 8, children: [
                                         OutlinedButton.icon(
-                                          key: const ValueKey('choose-background'),
-                                          onPressed: importingBackground ? null : () async {
-                                            update(() { importingBackground = true; backgroundError = null; });
-                                            try {
-                                              final files = await FilePicker.platform.pickFiles(type: FileType.custom,
-                                                allowedExtensions: ['jpg', 'jpeg', 'png', 'webp']);
-                                              final source = files?.files.single.path;
-                                              if (source != null) {
-                                                final path = await c.importBackground(source);
-                                                if (dialogClosed || !ctx.mounted) {
-                                                  await c.discardUnusedBackground(path);
-                                                  return;
-                                                }
-                                                stagedBackgrounds.add(path);
-                                                if (ctx.mounted) update(() => background = path);
-                                              }
-                                            } catch (_) {
-                                              if (ctx.mounted) update(() => backgroundError = '图片导入失败，请选择 20 MB 以内的静态 JPG、PNG 或 WebP 图片。');
-                                            } finally {
-                                              if (ctx.mounted) update(() => importingBackground = false);
-                                            }
-                                          }, icon: const Icon(Icons.add_photo_alternate_outlined),
-                                          label: Text(importingBackground ? '正在处理图片…' : '选择背景图片')),
-                                        if (background != null) TextButton(
-                                          key: const ValueKey('remove-background'),
-                                          onPressed: importingBackground ? null : () => update(() => background = null), child: const Text('移除背景')),
+                                            key: const ValueKey(
+                                                'choose-background'),
+                                            onPressed: importingBackground
+                                                ? null
+                                                : () async {
+                                                    update(() {
+                                                      importingBackground =
+                                                          true;
+                                                      backgroundError = null;
+                                                    });
+                                                    try {
+                                                      final files = await FilePicker
+                                                          .platform
+                                                          .pickFiles(
+                                                              type: FileType
+                                                                  .custom,
+                                                              allowedExtensions: [
+                                                            'jpg',
+                                                            'jpeg',
+                                                            'png',
+                                                            'webp'
+                                                          ]);
+                                                      final source = files
+                                                          ?.files.single.path;
+                                                      if (source != null) {
+                                                        final path = await c
+                                                            .importBackground(
+                                                                source);
+                                                        if (dialogClosed ||
+                                                            !ctx.mounted) {
+                                                          await c
+                                                              .discardUnusedBackground(
+                                                                  path);
+                                                          return;
+                                                        }
+                                                        stagedBackgrounds
+                                                            .add(path);
+                                                        if (ctx.mounted) {
+                                                          update(() =>
+                                                              background =
+                                                                  path);
+                                                        }
+                                                      }
+                                                    } catch (_) {
+                                                      if (ctx.mounted) {
+                                                        update(() =>
+                                                            backgroundError =
+                                                                '图片导入失败，请选择 20 MB 以内的静态 JPG、PNG 或 WebP 图片。');
+                                                      }
+                                                    } finally {
+                                                      if (ctx.mounted) {
+                                                        update(() =>
+                                                            importingBackground =
+                                                                false);
+                                                      }
+                                                    }
+                                                  },
+                                            icon: const Icon(Icons
+                                                .add_photo_alternate_outlined),
+                                            label: Text(importingBackground
+                                                ? '正在处理图片…'
+                                                : '选择背景图片')),
+                                        if (background != null)
+                                          TextButton(
+                                              key: const ValueKey(
+                                                  'remove-background'),
+                                              onPressed: importingBackground
+                                                  ? null
+                                                  : () => update(
+                                                      () => background = null),
+                                              child: const Text('移除背景')),
                                       ]),
-                                      if (backgroundError != null) Text(backgroundError!, style: TextStyle(color: Theme.of(ctx).colorScheme.error)),
+                                      if (backgroundError != null)
+                                        Text(backgroundError!,
+                                            style: TextStyle(
+                                                color: Theme.of(ctx)
+                                                    .colorScheme
+                                                    .error)),
                                       if (background != null) ...[
-                                        Text('图片可见度 ${(backgroundOpacity * 100).round()}%'),
-                                        Slider(key: const ValueKey('background-opacity'), value: backgroundOpacity,
-                                          min: .05, max: 1, onChanged: (v) => update(() => backgroundOpacity = v)),
+                                        Text(
+                                            '图片可见度 ${(backgroundOpacity * 100).round()}%'),
+                                        Slider(
+                                            key: const ValueKey(
+                                                'background-opacity'),
+                                            value: backgroundOpacity,
+                                            min: .05,
+                                            max: 1,
+                                            onChanged: (v) => update(
+                                                () => backgroundOpacity = v)),
+                                        Text(
+                                            '卡片透明度 ${(cardTransparency * 100).round()}%'),
+                                        Slider(
+                                            key: const ValueKey(
+                                                'card-transparency'),
+                                            value: cardTransparency,
+                                            min: 0,
+                                            max: 1,
+                                            divisions: 100,
+                                            onChanged: (v) => update(
+                                                () => cardTransparency = v)),
+                                        const Text(
+                                            '0% 不透明，100% 完全透明；文字与操作按钮保持清晰。'),
+                                        SizedBox(
+                                            height: 100,
+                                            width: double.infinity,
+                                            child: ClipRRect(
+                                                borderRadius:
+                                                    BorderRadius.circular(12),
+                                                child: AppBackground(
+                                                    path: background,
+                                                    opacity: backgroundOpacity,
+                                                    cardTransparency:
+                                                        cardTransparency,
+                                                    child: const Padding(
+                                                        padding:
+                                                            EdgeInsets.all(12),
+                                                        child: Card(
+                                                            key: ValueKey(
+                                                                'background-card-preview'),
+                                                            child: Center(
+                                                                child: Text(
+                                                                    '卡片透明效果预览'))))))),
                                       ],
                                       const Text('图片保存在本机，不随任务备份传输；点击保存后生效。'),
                                       if (Platform.isWindows) ...[
                                         const SizedBox(height: 20),
                                         const Divider(),
                                         const Text('全局快捷键（窗口最小化或在托盘时也有效）'),
-                                        Text('Ctrl + Shift + 空格：播放 / 暂停音乐${c.hotkeyStatus['music'] == false ? '（被其他程序占用）' : ''}'),
-                                        Text('Ctrl + Alt + 空格：暂停 / 继续当前番茄钟${c.hotkeyStatus['timer'] == false ? '（被其他程序占用）' : ''}'),
+                                        HotkeySetting(
+                                            key: const ValueKey('music-hotkey'),
+                                            title: '音乐播放 / 暂停',
+                                            binding: musicHotkey,
+                                            controller: c,
+                                            onChanged: (v) => update(() {
+                                                  musicHotkey = v;
+                                                  saveError = null;
+                                                })),
+                                        HotkeySetting(
+                                            key: const ValueKey('timer-hotkey'),
+                                            title: '当前计时暂停 / 继续',
+                                            binding: timerHotkey,
+                                            controller: c,
+                                            onChanged: (v) => update(() {
+                                                  timerHotkey = v;
+                                                  saveError = null;
+                                                })),
+                                        if (c.hotkeyStatus['music'] == false ||
+                                            c.hotkeyStatus['timer'] == false)
+                                          const Text('部分快捷键被其他程序占用，请修改后保存。'),
+                                        TextButton(
+                                            key:
+                                                const ValueKey('reset-hotkeys'),
+                                            onPressed: () => update(() {
+                                                  musicHotkey = HotkeyBinding
+                                                      .musicDefault;
+                                                  timerHotkey = HotkeyBinding
+                                                      .timerDefault;
+                                                  saveError = null;
+                                                }),
+                                            child: const Text('恢复默认快捷键')),
+                                        const Text('修改后点击保存生效；两组按键不能相同。'),
                                         const Text('计时快捷键不会从待机状态自动开始新番茄钟。'),
                                         SwitchListTile.adaptive(
                                             key: const ValueKey(
@@ -893,39 +1076,63 @@ class _HomeState extends State<Home> {
                                     ])))),
                     actions: [
                       TextButton(
-                          onPressed: () => Navigator.pop(ctx, false),
+                          onPressed: savingSettings
+                              ? null
+                              : () => Navigator.pop(ctx, false),
                           child: const Text('取消')),
                       FilledButton(
-                          onPressed: importingBackground ? null : () {
-                            if (form.currentState!.validate()) {
-                              Navigator.pop(ctx, true);
-                            }
-                          },
-                          child: const Text('保存'))
-                    ])));
-    final result = await Navigator.of(context, rootNavigator: true).push(route);
+                          onPressed: importingBackground || savingSettings
+                              ? null
+                              : () async {
+                                  if (!form.currentState!.validate()) return;
+                                  if (musicHotkey.sameAs(timerHotkey)) {
+                                    update(() => saveError = '音乐和计时的快捷键不能相同。');
+                                    return;
+                                  }
+                                  update(() {
+                                    savingSettings = true;
+                                    saveError = null;
+                                  });
+                                  await c.perform(() async {
+                                    try {
+                                      await c.saveSettings(Settings(
+                                          focus: int.parse(focus.text),
+                                          shortBreak: int.parse(short.text),
+                                          longBreak: int.parse(long.text),
+                                          theme: theme,
+                                          backgroundPath: background,
+                                          backgroundOpacity: backgroundOpacity,
+                                          cardTransparency: cardTransparency,
+                                          musicHotkey: musicHotkey,
+                                          timerHotkey: timerHotkey,
+                                          goals: {
+                                            for (final e in goals.entries)
+                                              if (e.value.text.isNotEmpty)
+                                                e.key: int.parse(e.value.text)
+                                          }));
+                                      if (Platform.isWindows &&
+                                          c.desktopIntegrationAvailable &&
+                                          (launchAtLogin != c.startupEnabled ||
+                                              (launchAtLogin &&
+                                                  !c.startupCurrentPath))) {
+                                        await c.setLaunchAtLogin(launchAtLogin);
+                                      }
+                                      if (ctx.mounted) Navigator.pop(ctx, true);
+                                    } catch (e) {
+                                      if (ctx.mounted) {
+                                        update(() => saveError = '保存失败：$e');
+                                      }
+                                    } finally {
+                                      if (ctx.mounted) {
+                                        update(() => savingSettings = false);
+                                      }
+                                    }
+                                  });
+                                },
+                          child: Text(savingSettings ? '正在保存…' : '保存'))
+                    ]))));
+    await Navigator.of(context, rootNavigator: true).push(route);
     dialogClosed = true;
-    if (result == true) {
-      await c.perform(() async {
-        await c.saveSettings(Settings(
-            focus: int.parse(focus.text),
-            shortBreak: int.parse(short.text),
-            longBreak: int.parse(long.text),
-            theme: theme,
-            backgroundPath: background,
-            backgroundOpacity: backgroundOpacity,
-            goals: {
-              for (final e in goals.entries)
-                if (e.value.text.isNotEmpty) e.key: int.parse(e.value.text)
-            }));
-        if (Platform.isWindows &&
-            c.desktopIntegrationAvailable &&
-            (launchAtLogin != c.startupEnabled ||
-                (launchAtLogin && !c.startupCurrentPath))) {
-          await c.setLaunchAtLogin(launchAtLogin);
-        }
-      });
-    }
     for (final path in stagedBackgrounds) {
       await c.discardUnusedBackground(path);
     }
@@ -1076,10 +1283,12 @@ class _HistoryPageState extends State<HistoryPage> {
                 .contains(query.toLowerCase()) &&
             (filter == 'all' ||
                 (filter == 'complete'
-                    ? s.completed
+                    ? s.countsAsPomodoro
                     : filter == 'excluded'
                         ? s.excluded
-                        : !s.completed)) &&
+                        : filter == 'invalid'
+                            ? !s.isValidFocus
+                            : s.isValidFocus && !s.completed)) &&
             (range == null ||
                 (!beijing(s.started).isBefore(DateTime.utc(range!.start.year,
                         range!.start.month, range!.start.day)) &&
@@ -1097,6 +1306,7 @@ class _HistoryPageState extends State<HistoryPage> {
           'all': '全部',
           'complete': '完整完成',
           'partial': '未完成',
+          'invalid': '无效自习',
           'excluded': '已排除'
         }.entries)
           ChoiceChip(
@@ -1122,7 +1332,8 @@ class _HistoryPageState extends State<HistoryPage> {
       ]),
       const SizedBox(height: 20),
       Text(
-          '${records.length} 条记录 · 实际专注 ${minutes(records.where((s) => !s.excluded).fold(0, (n, s) => n + s.milliseconds))} 分钟'),
+          '${records.length} 条记录 · 有效专注 ${minutes(records.where((s) => s.includedInStatistics).fold(0, (n, s) => n + s.milliseconds))} 分钟'),
+      const Text('单次实际专注不足 1 分钟为无效自习，仅保留历史，不计入统计与番茄数；暂停不计时。'),
       const SizedBox(height: 12),
       if (records.isEmpty)
         const Padding(
@@ -1132,14 +1343,16 @@ class _HistoryPageState extends State<HistoryPage> {
           padding: const EdgeInsets.only(bottom: 10),
           child: Card(
               child: ListTile(
-                  leading: Icon(s.excluded
-                      ? Icons.visibility_off_outlined
-                      : s.completed
-                          ? Icons.check_circle_outline
-                          : Icons.timelapse),
+                  leading: Icon(!s.isValidFocus
+                      ? Icons.timer_off_outlined
+                      : s.excluded
+                          ? Icons.visibility_off_outlined
+                          : s.completed
+                              ? Icons.check_circle_outline
+                              : Icons.timelapse),
                   title: Text(s.taskName),
                   subtitle: Text(
-                      '${dateText(beijing(s.started))} ${clockText((beijing(s.started).hour * 60 + beijing(s.started).minute) * 60000)}\n${s.category} · ${reasons[s.reason]}${s.excluded ? ' · 已排除统计' : ''}'),
+                      '${dateText(beijing(s.started))} ${clockText((beijing(s.started).hour * 60 + beijing(s.started).minute) * 60000)}\n${s.category} · ${!s.isValidFocus ? '无效自习（不足 1 分钟）' : reasons[s.reason]}${s.excluded ? ' · 已排除统计' : ''}'),
                   trailing: Text('${minutes(s.milliseconds)} 分钟'),
                   isThreeLine: true,
                   onTap: () => showDialog<void>(
@@ -1150,18 +1363,19 @@ class _HistoryPageState extends State<HistoryPage> {
                                   child: SelectableText(
                                       '科目：${s.category}\n开始：${beijing(s.started).toIso8601String().replaceAll('Z', '')} 北京时间\n结束：${beijing(s.ended).toIso8601String().replaceAll('Z', '')} 北京时间\n计划：${s.plannedSeconds ~/ 60} 分钟\n实际：${minutes(s.milliseconds)} 分钟\n暂停：${s.pauses.length} 次\n结束原因：${reasons[s.reason]}\n设备：${s.device}\n记录编号：${s.id}\n\n专注区间：\n${s.spans.map((x) => '${beijing(x.start).toIso8601String().replaceAll('Z', '')} → ${beijing(x.end).toIso8601String().replaceAll('Z', '')}').join('\n')}\n\n暂停区间：\n${s.pauses.map((x) => '${beijing(x.start).toIso8601String().replaceAll('Z', '')} → ${beijing(x.end).toIso8601String().replaceAll('Z', '')}').join('\n')}')),
                               actions: [
-                                TextButton(
-                                    onPressed: () async {
-                                      Navigator.pop(ctx);
-                                      await widget.c.perform(() async {
-                                        await widget.c.store.session(
-                                            s.withExcluded(!s.excluded),
-                                            replace: true);
-                                        await widget.c.refresh();
-                                      });
-                                    },
-                                    child:
-                                        Text(s.excluded ? '恢复计入统计' : '排除统计')),
+                                if (s.isValidFocus)
+                                  TextButton(
+                                      onPressed: () async {
+                                        Navigator.pop(ctx);
+                                        await widget.c.perform(() async {
+                                          await widget.c.store.session(
+                                              s.withExcluded(!s.excluded),
+                                              replace: true);
+                                          await widget.c.refresh();
+                                        });
+                                      },
+                                      child:
+                                          Text(s.excluded ? '恢复计入统计' : '排除统计')),
                                 FilledButton(
                                     onPressed: () => Navigator.pop(ctx),
                                     child: const Text('关闭'))
@@ -1328,6 +1542,9 @@ class _ReportsPageState extends State<ReportsPage> {
           '北京时间时段分布（分钟）',
           BarChart({for (var h = 0; h < 24; h++) '$h时': report.hourly[h]},
               compact: true)),
+      const Padding(
+          padding: EdgeInsets.only(bottom: 12),
+          child: Text('统计仅包含单次实际专注满 1 分钟且未被排除的记录。跨周期按整次专注判断有效性，暂停与休息不计入。')),
       FocusTimeAnalysis(report),
       panel(
           '基于记录的观察',

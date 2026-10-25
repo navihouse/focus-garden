@@ -161,7 +161,7 @@ class Report {
 Report buildReport(Iterable<FocusSession> sessions, ReportPeriod period) {
   final r = Report(period);
   final low = civilUtc(period.start), high = civilUtc(period.end);
-  for (final s in sessions.where((s) => !s.excluded)) {
+  for (final s in sessions.where((s) => s.includedInStatistics)) {
     final name = s.category.trim().isEmpty ? '未分类' : s.category.trim();
     final subject = SubjectActivity(name);
     final endsInPeriod = !s.ended.isBefore(low) && s.ended.isBefore(high);

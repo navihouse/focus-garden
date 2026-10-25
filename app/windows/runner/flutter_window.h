@@ -35,6 +35,11 @@ class FlutterWindow : public Win32Window {
   bool start_hidden_ = false;
   bool music_hotkey_ = false;
   bool timer_hotkey_ = false;
+  UINT music_modifiers_ = MOD_CONTROL | MOD_SHIFT;
+  UINT timer_modifiers_ = MOD_CONTROL | MOD_ALT;
+  UINT music_key_ = VK_SPACE, timer_key_ = VK_SPACE;
+  void ReleaseHotkeys();
+  flutter::EncodableMap AcquireHotkeys();
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

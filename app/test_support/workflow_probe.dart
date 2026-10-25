@@ -133,7 +133,14 @@ Future<void> main() async {
     }
     c.settings = const Settings(shortBreak: 1, longBreak: 2);
     c.completedCycle = 3;
-    await c.perform(() => c.startFocus(testSeconds: 1));
+    await c.perform(() async {
+      c.engine.start(
+          id: 'probe-minute',
+          device: c.device,
+          seconds: 60,
+          now: DateTime.now().toUtc().subtract(const Duration(minutes: 1)),
+          tick: c.clock.elapsedMilliseconds - 60000);
+    });
     Future<void> waitFor(Phase phase) async {
       final timeout = Stopwatch()..start();
       while (c.phase != phase && timeout.elapsedMilliseconds < 8000) {

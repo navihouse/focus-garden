@@ -273,14 +273,20 @@ class FocusRuntime private constructor(private val context: Context) {
         val record = if(!isRest) snapshot(reason) else null
         if(record != null) {
             events.put(JSONObject().put("id", record.getString("id")).put("session", record))
-            if(reason == "completed") cycle++
+            // Sub-minute debug/legacy sessions remain in history but never count as pomodoros.
+            val recordedSpans = record.getJSONArray("spans")
+            val focusMs = (0 until recordedSpans.length()).sumOf {
+                val span = recordedSpans.getJSONObject(it)
+                millis(span.getString("end")) - millis(span.getString("start"))
+            }
+            if(reason == "completed" && focusMs >= 60000L) cycle++
         }
         val restWasActive = isRest
         val autoRest = reason == "completed" && !restWasActive
         // No idle gap: the player's callback must not stop the service between phases.
         phase = if(autoRest) "rest" else "ended"; isRest = autoRest; checkpoint = null; base = null
         if(autoRest) {
-            restDuration = (if(cycle % 4 == 0) longBreakSeconds else shortBreakSeconds) * 1000L
+            restDuration = (if(cycle > 0 && cycle % 4 == 0) longBreakSeconds else shortBreakSeconds) * 1000L
             restLeft = restDuration; restTick = tickNow()
         }
         persist(); schedule()
@@ -288,7 +294,7 @@ class FocusRuntime private constructor(private val context: Context) {
         if(reason == "completed") {
             try { CompletionSounds.play(if(restWasActive) "rest" else "focus") }
             catch(e: Exception) { error = "计时阶段已更新，提示音暂时无法播放。" }
-            try { FocusService.instance?.completed(if(restWasActive) "休息结束，请手动开始下一次专注。" else "本次专注已完成，已自动开始${if(cycle % 4 == 0) "长" else "短"}休息。") }
+            try { FocusService.instance?.completed(if(restWasActive) "休息结束，请手动开始下一次专注。" else "本次专注已完成，已自动开始${if(cycle > 0 && cycle % 4 == 0) "长" else "短"}休息。") }
             catch(e: Exception) { error = "计时阶段已更新，通知暂时无法显示。" }
         }
         refreshService()

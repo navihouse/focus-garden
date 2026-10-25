@@ -8,6 +8,37 @@
 
 #include "flutter/generated_plugin_registrant.h"
 
+namespace {
+bool ReadHotkey(const flutter::EncodableMap& args, const char* name, UINT* modifiers, UINT* key) {
+  const auto entry = args.find(flutter::EncodableValue(name));
+  const auto* binding = entry == args.end() ? nullptr : std::get_if<flutter::EncodableMap>(&entry->second);
+  if (!binding) return false;
+  const auto m = binding->find(flutter::EncodableValue("modifiers"));
+  const auto k = binding->find(flutter::EncodableValue("keyCode"));
+  const auto* mv = m == binding->end() ? nullptr : std::get_if<int32_t>(&m->second);
+  const auto* kv = k == binding->end() ? nullptr : std::get_if<int32_t>(&k->second);
+  if (!mv || !kv || *mv < 1 || *mv > 7 || (*mv & (MOD_CONTROL | MOD_ALT)) == 0) return false;
+  if (!(*kv == VK_SPACE || (*kv >= '0' && *kv <= '9') || (*kv >= 'A' && *kv <= 'Z') ||
+        (*kv >= VK_F1 && *kv <= VK_F11))) return false;
+  *modifiers = static_cast<UINT>(*mv); *key = static_cast<UINT>(*kv); return true;
+}
+}  // namespace
+
+void FlutterWindow::ReleaseHotkeys() {
+  if (music_hotkey_) UnregisterHotKey(GetHandle(), 4401);
+  if (timer_hotkey_) UnregisterHotKey(GetHandle(), 4402);
+  music_hotkey_ = timer_hotkey_ = false;
+}
+
+flutter::EncodableMap FlutterWindow::AcquireHotkeys() {
+  if (!music_hotkey_) music_hotkey_ = RegisterHotKey(GetHandle(), 4401,
+      music_modifiers_ | MOD_NOREPEAT, music_key_) != 0;
+  if (!timer_hotkey_) timer_hotkey_ = RegisterHotKey(GetHandle(), 4402,
+      timer_modifiers_ | MOD_NOREPEAT, timer_key_) != 0;
+  return {{flutter::EncodableValue("music"), flutter::EncodableValue(music_hotkey_)},
+          {flutter::EncodableValue("timer"), flutter::EncodableValue(timer_hotkey_)}};
+}
+
 FlutterWindow::FlutterWindow(const flutter::DartProject& project, bool start_hidden)
     : project_(project), start_hidden_(start_hidden) {}
 
@@ -37,13 +68,34 @@ bool FlutterWindow::OnCreate() {
       &flutter::StandardMethodCodec::GetInstance());
   focus_channel_->SetMethodCallHandler([this](const auto& call, auto result) {
     if (call.method_name() == "registerHotkeys") {
-      if (!music_hotkey_) music_hotkey_ = RegisterHotKey(GetHandle(), 4401,
-          MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, VK_SPACE) != 0;
-      if (!timer_hotkey_) timer_hotkey_ = RegisterHotKey(GetHandle(), 4402,
-          MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_SPACE) != 0;
-      result->Success(flutter::EncodableValue(flutter::EncodableMap{
-          {flutter::EncodableValue("music"), flutter::EncodableValue(music_hotkey_)},
-          {flutter::EncodableValue("timer"), flutter::EncodableValue(timer_hotkey_)}}));
+      const auto* args = std::get_if<flutter::EncodableMap>(call.arguments());
+      UINT music_modifiers, music_key, timer_modifiers, timer_key;
+      if (!args || !ReadHotkey(*args, "music", &music_modifiers, &music_key) ||
+          !ReadHotkey(*args, "timer", &timer_modifiers, &timer_key) ||
+          (music_modifiers == timer_modifiers && music_key == timer_key)) {
+        result->Error("INVALID_HOTKEY", "Expected two different Ctrl/Alt key combinations"); return;
+      }
+      const auto old_music_modifiers = music_modifiers_, old_music_key = music_key_;
+      const auto old_timer_modifiers = timer_modifiers_, old_timer_key = timer_key_;
+      ReleaseHotkeys();
+      music_modifiers_ = music_modifiers; music_key_ = music_key;
+      timer_modifiers_ = timer_modifiers; timer_key_ = timer_key;
+      auto status = AcquireHotkeys();
+      const bool accepted = music_hotkey_ && timer_hotkey_;
+      status[flutter::EncodableValue("accepted")] = flutter::EncodableValue(accepted);
+      const auto initial_it = args->find(flutter::EncodableValue("initial"));
+      const auto* initial = initial_it == args->end() ? nullptr : std::get_if<bool>(&initial_it->second);
+      if (!accepted && !(initial && *initial)) {
+        ReleaseHotkeys();
+        music_modifiers_ = old_music_modifiers; music_key_ = old_music_key;
+        timer_modifiers_ = old_timer_modifiers; timer_key_ = old_timer_key;
+        status[flutter::EncodableValue("restored")] = flutter::EncodableValue(AcquireHotkeys());
+      }
+      result->Success(flutter::EncodableValue(status));
+    } else if (call.method_name() == "suspendHotkeys") {
+      ReleaseHotkeys(); result->Success();
+    } else if (call.method_name() == "resumeHotkeys") {
+      result->Success(flutter::EncodableValue(AcquireHotkeys()));
     } else if (call.method_name() == "taskCompleted") {
       if (PlayTaskCompletionSound()) result->Success();
       else result->Error("TASK_SOUND", "Could not play completion sound");
@@ -118,8 +170,7 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
-  if (music_hotkey_) { UnregisterHotKey(GetHandle(), 4401); music_hotkey_ = false; }
-  if (timer_hotkey_) { UnregisterHotKey(GetHandle(), 4402); timer_hotkey_ = false; }
+  ReleaseHotkeys();
   if (focus_channel_) {
     focus_channel_->SetMethodCallHandler(nullptr);
     focus_channel_.reset();

@@ -39,9 +39,9 @@ void main() {
     c.engine.start(
         id: id,
         device: 'test',
-        seconds: 1,
-        now: DateTime.now().toUtc().subtract(const Duration(seconds: 1)),
-        tick: c.clock.elapsedMilliseconds - 1000);
+        seconds: 60,
+        now: DateTime.now().toUtc().subtract(const Duration(minutes: 1)),
+        tick: c.clock.elapsedMilliseconds - 60000);
   }
 
   test(
@@ -52,13 +52,29 @@ void main() {
     expect(c.phase, Phase.rest);
     expect(c.remainingMs, 180000);
     expect(c.sessions.single.completed, true);
-    expect(c.sessions.single.milliseconds, 1000);
+    expect(c.sessions.single.milliseconds, 60000);
     expect(c.completedCycle, 1);
     expect(await c.store.get('checkpoint'), isNull);
     expect(await c.store.get('cycle'), 1);
     await c.tick();
     expect(c.sessions.length, 1);
     expect(cues, ['focus']);
+  });
+
+  test('sub-minute completed session stays in history without advancing cycle',
+      () async {
+    c.engine.start(
+        id: 'invalid',
+        device: 'test',
+        seconds: 1,
+        now: DateTime.now().toUtc().subtract(const Duration(seconds: 1)),
+        tick: c.clock.elapsedMilliseconds - 1000);
+    await c.tick();
+    expect(c.sessions.single.isValidFocus, false);
+    expect(c.sessions.single.countsAsPomodoro, false);
+    expect(c.completedCycle, 0);
+    expect(c.durationMs, 180000);
+    expect(c.phase, Phase.rest);
   });
 
   test('fourth completion automatically starts long rest', () async {
@@ -130,8 +146,8 @@ void main() {
   test('sleep wins over an elapsed deadline and never starts automatic rest',
       () async {
     expiredFocus('sleep');
-    await c.store.commitCheckpoint(c.engine
-        .snapshot(DateTime.now().toUtc(), c.clock.elapsedMilliseconds - 500)!);
+    await c.store.commitCheckpoint(c.engine.snapshot(
+        DateTime.now().toUtc(), c.clock.elapsedMilliseconds - 59500)!);
     suspended = true;
     await c.tick();
     expect(c.phase, Phase.ended);

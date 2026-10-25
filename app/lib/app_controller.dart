@@ -46,6 +46,7 @@ class AppController extends ChangeNotifier {
       startMenuAvailable = false;
   String repeat = 'all';
   Map<String, dynamic> hotkeyStatus = {};
+  bool _capturingHotkey = false;
   double volume = .6;
   int trackIndex = 0;
   Json androidState = {}, permissions = {};
@@ -149,7 +150,7 @@ class AppController extends ChangeNotifier {
             await native.invokeMethod('createStartMenuShortcut');
           }
           await refreshDesktopIntegration();
-          hotkeyStatus = asJson(await native.invokeMethod('registerHotkeys'));
+          hotkeyStatus = await registerHotkeys(settings, initial: true);
           if (hotkeyStatus['music'] != true || hotkeyStatus['timer'] != true) {
             message = '部分全局快捷键被其他程序占用，请在设置中查看。';
           }
@@ -211,7 +212,8 @@ class AppController extends ChangeNotifier {
     if (task.status == 'done' && previous?.status != 'done') {
       throw StateError('请点击任务左侧圆环完成任务');
     }
-    await store.task(TaskItem.fromJson({...task.toJson(),
+    await store.task(TaskItem.fromJson({
+      ...task.toJson(),
       'completedAt': task.status == 'done'
           ? (previous?.completionTime ?? task.completionTime).toIso8601String()
           : null,
@@ -421,7 +423,7 @@ class AppController extends ChangeNotifier {
     }
     if (s != null) {
       await store.commitSession(s);
-      if (s.completed) {
+      if (s.countsAsPomodoro) {
         completedCycle++;
         await store.put('cycle', completedCycle);
       }
@@ -448,17 +450,73 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> saveSettings(Settings value) async {
+    if (!value.musicHotkey.valid ||
+        !value.timerHotkey.valid ||
+        value.musicHotkey.sameAs(value.timerHotkey)) {
+      throw const FormatException('两组快捷键必须不同，且包含 Ctrl 或 Alt 和一个受支持的按键。');
+    }
+    final oldSettings = settings;
+    final hotkeysChanged = !value.musicHotkey.sameAs(settings.musicHotkey) ||
+        !value.timerHotkey.sameAs(settings.timerHotkey);
+    if (Platform.isWindows &&
+        (hotkeysChanged || hotkeyStatus.values.contains(false))) {
+      final status = await registerHotkeys(value);
+      if (status['accepted'] != true) {
+        hotkeyStatus = asJson(status['restored']);
+        notifyListeners();
+        throw FormatException(
+            '${status['music'] == false ? '音乐' : '计时'}快捷键被系统或其他程序占用，请换一组按键。原设置已保留。');
+      }
+      hotkeyStatus = status;
+    }
     final oldBackground = settings.backgroundPath;
+    try {
+      await store.put('settings', value.toJson());
+    } catch (_) {
+      if (Platform.isWindows && hotkeysChanged) {
+        hotkeyStatus = await registerHotkeys(oldSettings, initial: true);
+      }
+      rethrow;
+    }
     settings = value;
-    await store.put('settings', value.toJson());
     if (android) await native.invokeMethod('timerSettings', _breakSettings);
     notifyListeners();
     await discardUnusedBackground(oldBackground);
   }
 
   Future<void> handleHotkey(String action) async {
+    if (_capturingHotkey) return;
     if (action == 'music') await music('toggle');
     if (action == 'timer' && active) await pauseResume();
+  }
+
+  Future<Json> registerHotkeys(Settings value, {bool initial = false}) async =>
+      asJson(await native.invokeMethod('registerHotkeys', {
+        'music': value.musicHotkey.toJson(),
+        'timer': value.timerHotkey.toJson(),
+        'initial': initial,
+      }));
+
+  Future<void> suspendHotkeys() async {
+    _capturingHotkey = true;
+    try {
+      await native.invokeMethod('suspendHotkeys');
+    } catch (_) {
+      _capturingHotkey = false;
+      rethrow;
+    }
+  }
+
+  Future<void> resumeHotkeys() async {
+    try {
+      hotkeyStatus = asJson(await native.invokeMethod('resumeHotkeys'));
+      if (hotkeyStatus['music'] == false || hotkeyStatus['timer'] == false) {
+        message = '部分快捷键被其他程序占用，请在设置中重新设置。';
+      }
+    } finally {
+      _capturingHotkey = false;
+      notifyListeners();
+    }
   }
 
   Future<String> importBackground(String source) async {
@@ -466,13 +524,15 @@ class AppController extends ChangeNotifier {
     if (await file.length() > 20 * 1024 * 1024) {
       throw const FormatException('背景图片不能超过 20 MB');
     }
-    final buffer = await ui.ImmutableBuffer.fromUint8List(await file.readAsBytes());
+    final buffer =
+        await ui.ImmutableBuffer.fromUint8List(await file.readAsBytes());
     ui.ImageDescriptor? descriptor;
     ui.Codec? codec;
     ui.Image? image;
     try {
       descriptor = await ui.ImageDescriptor.encoded(buffer);
-      final scale = math.min(1.0, 2560 / math.max(descriptor.width, descriptor.height));
+      final scale =
+          math.min(1.0, 2560 / math.max(descriptor.width, descriptor.height));
       codec = await descriptor.instantiateCodec(
           targetWidth: math.max(1, (descriptor.width * scale).round()),
           targetHeight: math.max(1, (descriptor.height * scale).round()));
@@ -486,14 +546,22 @@ class AppController extends ChangeNotifier {
       await destination.writeAsBytes(data.buffer.asUint8List(), flush: true);
       return destination.path;
     } finally {
-      image?.dispose(); codec?.dispose(); descriptor?.dispose(); buffer.dispose();
+      image?.dispose();
+      codec?.dispose();
+      descriptor?.dispose();
+      buffer.dispose();
     }
   }
 
   Future<void> discardUnusedBackground(String? path) async {
     if (path == null || path == settings.backgroundPath) return;
-    if (p.dirname(p.normalize(path)) != p.join(dataDirectory.path, 'backgrounds')) return;
-    try { await File(path).delete(); } catch (_) { /* A cached file may still be in use. */ }
+    if (p.dirname(p.normalize(path)) !=
+        p.join(dataDirectory.path, 'backgrounds')) {
+      return;
+    }
+    try {
+      await File(path).delete();
+    } catch (_) {/* A cached file may still be in use. */}
   }
 
   Future<void> saveTracks() async {
