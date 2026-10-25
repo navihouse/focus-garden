@@ -228,6 +228,6 @@ class Settings {
       longBreak: j['longBreak'] as int,
       theme: j['theme'] as String,
       backgroundPath: j['backgroundPath'] as String?,
-      backgroundOpacity: ((j['backgroundOpacity'] as num?)?.toDouble() ?? .2).clamp(.05, 1),
+      backgroundOpacity: ((j['backgroundOpacity'] as num?)?.toDouble() ?? .2).clamp(.05, 1.0).toDouble(),
       goals: Map<String, int>.from(j['goals'] as Map));
 }

@@ -44,8 +44,13 @@ class MainActivity : FlutterActivity() {
                             ,"liveEnabled" to (Build.VERSION.SDK_INT >= 36 && getSystemService(NotificationManager::class.java).canPostPromotedNotifications())
                         ))
                         "requestLiveUpdates" -> {
-                            if (Build.VERSION.SDK_INT >= 36) startActivity(Intent(Settings.ACTION_MANAGE_APP_PROMOTED_NOTIFICATIONS)
-                                .putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
+                            if (Build.VERSION.SDK_INT >= 36) {
+                                val promoted = Intent(Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS)
+                                    .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                                val fallback = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                                    .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                                startActivity(if(promoted.resolveActivity(packageManager) != null) promoted else fallback)
+                            }
                             result.success(null)
                         }
                         "requestPermissions" -> {
