@@ -8,6 +8,9 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import android.webkit.MimeTypeMap
+import androidx.core.content.FileProvider
+import java.io.File
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -23,6 +26,15 @@ class MainActivity : FlutterActivity() {
                 try {
                     val args = call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()
                     when (call.method) {
+                        "openLocalFile" -> {
+                            val file = File(args["path"] as String)
+                            require(file.isAbsolute && file.isFile && file.canRead()) { "File is unavailable" }
+                            val uri = FileProvider.getUriForFile(this, "$packageName.note_files", file)
+                            val type = MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension.lowercase()) ?: "application/octet-stream"
+                            startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, type)
+                                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+                            result.success(null)
+                        }
                         "taskCompleted" -> {
                             CompletionSounds.play("task"); result.success(null)
                         }

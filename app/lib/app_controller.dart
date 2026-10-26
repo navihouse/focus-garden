@@ -191,7 +191,13 @@ class AppController extends ChangeNotifier {
       // Completed tasks live in a folded group, newest completion first.
       final time = a.status == 'done'
           ? b.completionTime.compareTo(a.completionTime)
-          : b.modified.compareTo(a.modified);
+          : a.sortOrder != null || b.sortOrder != null
+              ? a.sortOrder == null
+                  ? 1
+                  : b.sortOrder == null
+                      ? -1
+                      : a.sortOrder!.compareTo(b.sortOrder!)
+              : b.modified.compareTo(a.modified);
       return time != 0 ? time : a.id.compareTo(b.id);
     });
     sessions = await store.sessions();
@@ -214,10 +220,40 @@ class AppController extends ChangeNotifier {
     }
     await store.task(TaskItem.fromJson({
       ...task.toJson(),
+      'sortOrder': previous != null
+          ? previous.sortOrder
+          : task.sortOrder ??
+              (tasks
+                      .where((t) => t.sortOrder != null)
+                      .fold<int>(0, (n, t) => math.min(n, t.sortOrder!)) -
+                  1),
       'completedAt': task.status == 'done'
           ? (previous?.completionTime ?? task.completionTime).toIso8601String()
           : null,
     }));
+    await refresh();
+  }
+
+  Future<void> reorderTask(String id, int newIndex) async {
+    final activeTasks = tasks.where((t) => t.status != 'done').toList();
+    final oldIndex = activeTasks.indexWhere((t) => t.id == id);
+    if (oldIndex < 0 ||
+        newIndex < 0 ||
+        newIndex >= activeTasks.length ||
+        oldIndex == newIndex) {
+      return;
+    }
+    activeTasks.insert(newIndex, activeTasks.removeAt(oldIndex));
+    final modified = DateTime.now().toUtc().toIso8601String();
+    await store.transaction(() async {
+      for (var i = 0; i < activeTasks.length; i++) {
+        await store.task(TaskItem.fromJson({
+          ...activeTasks[i].toJson(),
+          'sortOrder': i,
+          'modified': modified
+        }));
+      }
+    });
     await refresh();
   }
 

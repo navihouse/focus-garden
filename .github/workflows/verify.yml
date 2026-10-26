@@ -38,7 +38,7 @@ jobs:
           Copy-Item app/README.md "$release/使用说明.md"
       - uses: actions/upload-artifact@v4
         with:
-          name: FocusGarden-1.6.0-Windows-x64
+          name: FocusGarden-1.7.0-Windows-x64
           path: app/build/windows/x64/runner/Release/
           retention-days: 14
   android:
@@ -62,6 +62,6 @@ jobs:
         run: flutter build apk --release --target lib/main.dart
       - uses: actions/upload-artifact@v4
         with:
-          name: FocusGarden-1.6.0-Android-unsigned
+          name: FocusGarden-1.7.0-Android-unsigned
           path: app/build/app/outputs/flutter-apk/*.apk
           retention-days: 14

@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'app_controller.dart';
 import 'domain/models.dart';
+import 'notes_controller.dart';
+import 'notes_editor.dart';
 
 class TaskEditor extends StatefulWidget {
   final TaskItem? task;
@@ -27,7 +29,8 @@ class _TaskEditorState extends State<TaskEditor> {
   late final category = TextEditingController(text: widget.task?.category);
   late final estimate =
       TextEditingController(text: '${widget.task?.estimate ?? 1}');
-  late final notes = TextEditingController(text: widget.task?.notes);
+  late final notes =
+      NotesController(widget.task?.notes ?? '', widget.task?.noteLinks ?? []);
   final nextStep = TextEditingController();
   final nextFocus = FocusNode();
   String? stepError;
@@ -96,6 +99,8 @@ class _TaskEditorState extends State<TaskEditor> {
       status: status,
       due: due,
       notes: notes.text,
+      noteLinks: notes.links,
+      sortOrder: widget.task?.sortOrder,
       completedAt: widget.task?.completedAt,
       subtasks: subtasks
           .map((s) => SubtaskItem(
@@ -281,18 +286,7 @@ class _TaskEditorState extends State<TaskEditor> {
                                 icon: const Icon(Icons.add)),
                           ]),
                       const SizedBox(height: 20),
-                      TextFormField(
-                          key: const ValueKey('task-notes'),
-                          controller: notes,
-                          minLines: 4,
-                          maxLines: 8,
-                          maxLength: 10000,
-                          decoration: const InputDecoration(
-                              labelText: '备注',
-                              hintText: '添加备注，记录思路、要求或参考信息',
-                              alignLabelWithHint: true),
-                          validator: (v) =>
-                              (v?.length ?? 0) > 10000 ? '备注最多 10000 字' : null),
+                      NotesEditor(controller: notes),
                       const SizedBox(height: 12),
                       TextFormField(
                           controller: category,

@@ -91,7 +91,7 @@ void main() {
         ],
         modified: DateTime.utc(2026));
     final payload = exportBackup([rich], []);
-    expect(jsonDecode(payload)['version'], 3);
+    expect(jsonDecode(payload)['version'], 4);
     await importBackup(db, previewBackup(payload, [], []));
     final reopened = (await db.tasks()).single;
     expect(reopened.notes, rich.notes);

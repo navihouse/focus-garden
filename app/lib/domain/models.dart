@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'hotkey.dart';
+import 'note_link.dart';
 
 typedef Json = Map<String, dynamic>;
 
@@ -32,6 +33,8 @@ class TaskItem {
   final DateTime modified;
   final DateTime? completedAt;
   final String notes;
+  final List<NoteFileLink> noteLinks;
+  final int? sortOrder;
   final List<SubtaskItem> subtasks;
   const TaskItem(
       {required this.id,
@@ -41,6 +44,8 @@ class TaskItem {
       this.estimate = 1,
       this.due,
       this.notes = '',
+      this.noteLinks = const [],
+      this.sortOrder,
       this.subtasks = const [],
       this.completedAt,
       required this.modified});
@@ -52,6 +57,8 @@ class TaskItem {
         'status': status,
         'estimate': estimate,
         'notes': notes,
+        'noteLinks': noteLinks.map((link) => link.toJson()).toList(),
+        'sortOrder': sortOrder,
         'subtasks': subtasks.map((s) => s.toJson()).toList(),
         'due': due == null
             ? null
@@ -61,7 +68,9 @@ class TaskItem {
       };
   factory TaskItem.fromJson(Json j) {
     if ((j['notes'] != null && j['notes'] is! String) ||
-        (j['subtasks'] != null && j['subtasks'] is! List)) {
+        (j['subtasks'] != null && j['subtasks'] is! List) ||
+        (j['noteLinks'] != null && j['noteLinks'] is! List) ||
+        (j['sortOrder'] != null && j['sortOrder'] is! int)) {
       throw const FormatException('任务备注或子任务格式无效');
     }
     final t = TaskItem(
@@ -71,6 +80,10 @@ class TaskItem {
         status: j['status'] as String,
         estimate: j['estimate'] as int,
         notes: j['notes'] as String? ?? '',
+        noteLinks: ((j['noteLinks'] as List?) ?? [])
+            .map((l) => NoteFileLink.fromJson(asJson(l)))
+            .toList(),
+        sortOrder: j['sortOrder'] as int?,
         subtasks: ((j['subtasks'] as List?) ?? [])
             .map((s) => SubtaskItem.fromJson(asJson(s)))
             .toList(),
@@ -83,12 +96,24 @@ class TaskItem {
         t.name.length > 200 ||
         t.category.length > 100 ||
         t.notes.length > 10000 ||
+        t.noteLinks.length > 200 ||
+        (t.sortOrder != null && t.sortOrder!.abs() > 9007199254740991) ||
         t.subtasks.length > 200 ||
         t.subtasks.map((s) => s.id).toSet().length != t.subtasks.length ||
         t.estimate < 1 ||
         t.estimate > 999 ||
         !['todo', 'doing', 'done'].contains(t.status)) {
       throw const FormatException('任务字段无效');
+    }
+    var previousEnd = 0;
+    for (final link in t.noteLinks) {
+      if (link.start < previousEnd ||
+          link.end <= link.start ||
+          link.end > t.notes.length ||
+          localFilePath(link.target) != link.target) {
+        throw const FormatException('备注链接越界、重叠或文件地址无效');
+      }
+      previousEnd = link.end;
     }
     return t;
   }

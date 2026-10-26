@@ -294,7 +294,7 @@ class _HomeState extends State<Home> {
             : c.phase == Phase.focus
                 ? '把注意力留给眼前这一件事'
                 : '从一段安静的专注开始';
-    return ListView(padding: const EdgeInsets.all(24), children: [
+    return taskListView(focus: true, before: [
       Text(status, style: Theme.of(context).textTheme.headlineSmall),
       const SizedBox(height: 8),
       const Text('离线记录 · 音乐相伴 · 每一点投入都算数'),
@@ -415,7 +415,7 @@ class _HomeState extends State<Home> {
             label: const Text('添加任务')),
       ]),
       if (c.tasks.isEmpty) const Text('添加任务后，可点击左侧圆环标记完成。'),
-      ...taskGroups(focus: true),
+    ], after: [
       if (c.android && c.permissions['liveSupported'] == true)
         Padding(
             padding: const EdgeInsets.only(top: 20),
@@ -531,7 +531,7 @@ class _HomeState extends State<Home> {
                       onChanged: (v) => c.perform(() => c.music('volume', v)))),
             ]),
       ]);
-  Widget taskPage() => ListView(padding: const EdgeInsets.all(24), children: [
+  Widget taskPage() => taskListView(focus: false, before: [
         Row(children: [
           Expanded(
               child: Text('把大目标，变成眼前的小任务',
@@ -546,8 +546,29 @@ class _HomeState extends State<Home> {
           const Padding(
               padding: EdgeInsets.all(40),
               child: Text('还没有任务。添加一个任务，记录预计番茄数与实际投入。')),
-        ...taskGroups(focus: false),
       ]);
+  Widget taskListView(
+      {required bool focus,
+      required List<Widget> before,
+      List<Widget> after = const []}) {
+    final active = c.tasks.where((t) => t.status != 'done').toList();
+    return CustomScrollView(slivers: [
+      SliverPadding(
+          padding: const EdgeInsets.all(24),
+          sliver: SliverMainAxisGroup(slivers: [
+            SliverList.list(children: before),
+            SliverReorderableList(
+                key: ValueKey(focus ? 'focus-task-list' : 'main-task-list'),
+                itemCount: active.length,
+                onReorderItem: (oldIndex, newIndex) => c.perform(
+                    () => c.reorderTask(active[oldIndex].id, newIndex)),
+                itemBuilder: (_, index) =>
+                    taskCard(active[index], dragIndex: index)),
+            SliverList.list(children: [...taskGroups(focus: focus), ...after]),
+          ]))
+    ]);
+  }
+
   List<Widget> taskGroups({required bool focus}) {
     final completed = c.tasks.where((t) => t.status == 'done').toList()
       ..sort((a, b) {
@@ -556,7 +577,6 @@ class _HomeState extends State<Home> {
       });
     final expanded = focus ? focusDoneExpanded : taskDoneExpanded;
     return [
-      ...c.tasks.where((t) => t.status != 'done').map(taskCard),
       if (completed.isNotEmpty) ...[
         const Divider(),
         Align(
@@ -583,9 +603,29 @@ class _HomeState extends State<Home> {
     ];
   }
 
-  Widget taskCard(TaskItem t) {
+  Widget taskCard(TaskItem t, {int? dragIndex}) {
     final records =
         c.sessions.where((s) => s.taskId == t.id && s.includedInStatistics);
+    final menu = PopupMenuButton<String>(
+        key: ValueKey('task-menu-${t.id}'),
+        tooltip: '任务选项',
+        onSelected: (v) {
+          if (v == 'delete') {
+            deleteTask(t);
+            return;
+          }
+          c.perform(() => c.saveTask(TaskItem.fromJson({
+                ...t.toJson(),
+                'status': v,
+                'modified': DateTime.now().toUtc().toIso8601String()
+              })));
+        },
+        itemBuilder: (_) => [
+              ...taskStatuses.entries.where((e) => e.key != 'done').map(
+                  (e) => PopupMenuItem(value: e.key, child: Text(e.value))),
+              const PopupMenuDivider(),
+              const PopupMenuItem(value: 'delete', child: Text('删除任务')),
+            ]);
     return Padding(
         key: ValueKey('task-card-${t.id}'),
         padding: const EdgeInsets.only(bottom: 12),
@@ -611,29 +651,14 @@ class _HomeState extends State<Home> {
                     overflow: TextOverflow.ellipsis),
                 isThreeLine: true,
                 onTap: () => editTask(t),
-                trailing: PopupMenuButton<String>(
-                    key: ValueKey('task-menu-${t.id}'),
-                    tooltip: '任务选项',
-                    onSelected: (v) {
-                      if (v == 'delete') {
-                        deleteTask(t);
-                        return;
-                      }
-                      c.perform(() => c.saveTask(TaskItem.fromJson({
-                            ...t.toJson(),
-                            'status': v,
-                            'modified': DateTime.now().toUtc().toIso8601String()
-                          })));
-                    },
-                    itemBuilder: (_) => [
-                          ...taskStatuses.entries
-                              .where((e) => e.key != 'done')
-                              .map((e) => PopupMenuItem(
-                                  value: e.key, child: Text(e.value))),
-                          const PopupMenuDivider(),
-                          const PopupMenuItem(
-                              value: 'delete', child: Text('删除任务')),
-                        ]))));
+                trailing: dragIndex == null
+                    ? menu
+                    : MouseRegion(
+                        cursor: SystemMouseCursors.grab,
+                        child: ReorderableDragStartListener(
+                            key: ValueKey('task-drag-${t.id}'),
+                            index: dragIndex,
+                            child: menu)))));
   }
 
   Future<void> deleteTask(TaskItem task) async {

@@ -45,6 +45,11 @@
                 android:value="User-started focus and rest countdown, including when no music is selected, with visible remaining time and user stop controls." />
         </service>
         <receiver android:name=".DeadlineReceiver" android:exported="false" />
+        <provider android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.note_files" android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/note_file_paths" />
+        </provider>
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and

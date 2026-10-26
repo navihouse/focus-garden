@@ -67,7 +67,29 @@ bool FlutterWindow::OnCreate() {
       flutter_controller_->engine()->messenger(), "focus_garden/native",
       &flutter::StandardMethodCodec::GetInstance());
   focus_channel_->SetMethodCallHandler([this](const auto& call, auto result) {
-    if (call.method_name() == "registerHotkeys") {
+    if (call.method_name() == "openLocalFile") {
+      const auto* args = std::get_if<flutter::EncodableMap>(call.arguments());
+      const auto it = args ? args->find(flutter::EncodableValue("path")) : flutter::EncodableMap::const_iterator{};
+      const auto* path = args && it != args->end() ? std::get_if<std::string>(&it->second) : nullptr;
+      if (!path || path->size() < 3 || path->size() > 16384 || path->find('\0') != std::string::npos ||
+          !(((*path)[0] >= 'A' && (*path)[0] <= 'Z') || ((*path)[0] >= 'a' && (*path)[0] <= 'z')) ||
+          (*path)[1] != ':' || ((*path)[2] != '\\' && (*path)[2] != '/')) {
+        result->Error("INVALID_FILE_PATH", "Expected an absolute local file path"); return;
+      }
+      const int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path->data(), static_cast<int>(path->size()), nullptr, 0);
+      if (size <= 0) { result->Error("INVALID_FILE_PATH", "Invalid file path encoding"); return; }
+      std::wstring wide(size, L'\0');
+      MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path->data(), static_cast<int>(path->size()), wide.data(), size);
+      const DWORD attrs = GetFileAttributesW(wide.c_str());
+      if (attrs == INVALID_FILE_ATTRIBUTES || (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+        result->Error("FILE_UNAVAILABLE", "File does not exist or is inaccessible"); return;
+      }
+      SHELLEXECUTEINFOW info{}; info.cbSize = sizeof(info);
+      info.fMask = SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
+      info.hwnd = GetHandle(); info.lpVerb = L"open"; info.lpFile = wide.c_str(); info.nShow = SW_SHOWNORMAL;
+      if (ShellExecuteExW(&info)) result->Success();
+      else result->Error("OPEN_FILE_FAILED", "No application could open this file");
+    } else if (call.method_name() == "registerHotkeys") {
       const auto* args = std::get_if<flutter::EncodableMap>(call.arguments());
       UINT music_modifiers, music_key, timer_modifiers, timer_key;
       if (!args || !ReadHotkey(*args, "music", &music_modifiers, &music_key) ||

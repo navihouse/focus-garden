@@ -1,7 +1,7 @@
 name: focus_garden
 description: Offline focus timer, local music and evidence-based reports for Windows and Android.
 publish_to: none
-version: 1.6.0+9
+version: 1.7.0+10
 environment:
   sdk: '>=3.5.0 <4.0.0'
 dependencies:
