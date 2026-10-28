@@ -26,3 +26,5 @@ Android：创建自己的签名密钥，在 `android/key.properties` 中配置 `
 1.6.0 新增 `test_support/settings_probe.dart`，配合 `verify-custom-shortcuts.py <probe.exe> <空结果目录>` 验证真实全局快捷键触发、音乐 / 计时分离、占用时回滚、变更后释放旧组合键，以及本机设置持久化。仅在显式指定隔离环境时运行，不使用正式数据或修改开始菜单。测试组合键为 Ctrl+Shift/Alt+F9、F10，占用测试仅在验证进程中注册并释放。测试入口构建后必须重新构建 `lib/main.dart`，再生成正式发布包。
 
 1.7.0 的 `test_support/note_file_probe.dart` 配合 `verify-note-file.py <probe.exe> <空结果目录>`，验证 Windows 通过系统文件关联打开包含中文、空格及符号的本地文件，链接改名不改变目标，并拒绝缺失文件、网页和非本地路径。脚本为 UUID 命名的专用扩展名临时创建当前用户关联，由隔离的接收程序回写结果，不启动用户现有文档程序；finally 删除本次创建的注册表项。只有显式隔离环境才允许运行，不使用个人任务数据库。完成后必须重新构建生产入口再打包。
+
+1.8.0 新增 `test_support/playlist_probe.dart` 与 `verify-playlists.py <probe.exe> <空结果目录>`。脚本生成三个 WAV 样本，在独立数据库、零音量下验证自动切歌、列表循环、随机模式点歌映射、切换后替换队列、空歌单清空队列、专注暂停 / 继续联动、歌曲移动复制及重启恢复。不会读取用户音乐或个人记录；测试入口仅在显式隔离环境中运行。完成后重新构建 `lib/main.dart`，再打包正式发布。

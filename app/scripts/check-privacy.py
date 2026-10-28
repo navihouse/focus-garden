@@ -10,7 +10,7 @@ def git(*arguments):
     return subprocess.check_output(['git', '-C', str(ROOT), *arguments])
 
 files = [name.decode('utf-8') for name in git('ls-files', '-z').split(b'\0') if name]
-forbidden_parts = {'.git', '.dart_tool', '.gradle', '.idea', '.cxx', 'build', 'ephemeral', 'work', 'releases', 'signing'}
+forbidden_parts = {'.git', '.dart_tool', '.gradle', '.kotlin', '.idea', '.cxx', 'build', 'ephemeral', 'work', 'releases', 'signing'}
 forbidden_names = {'key.properties', 'local.properties', 'credentials.json', '.env'}
 forbidden_suffixes = {'.jks', '.keystore', '.pem', '.p12', '.pfx', '.sqlite', '.db', '.log', '.mp3', '.m4a', '.flac', '.wav', '.ogg', '.aac'}
 patterns = {

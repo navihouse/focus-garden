@@ -53,7 +53,7 @@ if options.include_android:
         raise SystemExit('Build an Android APK matching the current source version first')
     shutil.copy2(apk, output / f'FocusGarden-{version}-Android.apk')
 
-excluded_dirs = {'.git', '.dart_tool', '.gradle', '.idea', 'build', 'ephemeral', '.plugin_symlinks', '.cxx', 'captures'}
+excluded_dirs = {'.git', '.dart_tool', '.gradle', '.kotlin', '.idea', 'build', 'ephemeral', '.plugin_symlinks', '.cxx', 'captures'}
 excluded_files = {'local.properties', 'key.properties', '.flutter-plugins-dependencies', '.flutter-plugins'}
 def omit(relative):
     return bool(set(relative.parts) & excluded_dirs) or relative.name in excluded_files or relative.suffix in {'.jks', '.keystore', '.iml'}

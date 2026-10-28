@@ -11,6 +11,7 @@ import 'package:uuid/uuid.dart';
 import 'package:window_manager/window_manager.dart';
 import 'data/store.dart';
 import 'domain/models.dart';
+import 'domain/music_library.dart';
 import 'domain/timer_engine.dart';
 
 class AppController extends ChangeNotifier {
@@ -29,7 +30,15 @@ class AppController extends ChangeNotifier {
   late Directory dataDirectory;
   List<TaskItem> tasks = [];
   List<FocusSession> sessions = [];
-  List<Json> tracks = [];
+  MusicLibrary musicLibrary = MusicLibrary.empty();
+  List<MusicPlaylist> get playlists => musicLibrary.playlists;
+  MusicPlaylist get currentPlaylist => musicLibrary.current;
+  List<Json> get tracks => currentPlaylist.tracks;
+  set tracks(List<Json> value) {
+    currentPlaylist.tracks = value;
+    trackIndex = musicLibrary.index;
+  }
+
   Settings settings = const Settings();
   String device = '', message = '', recoveryMessage = '';
   String? selectedTask;
@@ -39,16 +48,22 @@ class AppController extends ChangeNotifier {
   Player? player;
   Timer? _ticker;
   int _lastSave = 0, completedCycle = 0;
-  bool _busy = false, muted = false, playing = false, shuffle = false;
+  bool _busy = false, muted = false, playing = false;
   bool desktopIntegrationAvailable = false,
       startupEnabled = false,
       startupCurrentPath = false,
       startMenuAvailable = false;
-  String repeat = 'all';
+  String get repeat => musicLibrary.repeat;
+  set repeat(String value) => musicLibrary.repeat = value;
+  bool get shuffle => musicLibrary.shuffle;
+  set shuffle(bool value) => musicLibrary.shuffle = value;
   Map<String, dynamic> hotkeyStatus = {};
   bool _capturingHotkey = false;
   double volume = .6;
-  int trackIndex = 0;
+  int get trackIndex => musicLibrary.index;
+  set trackIndex(int value) => musicLibrary.index =
+      tracks.isEmpty ? 0 : value.clamp(0, tracks.length - 1);
+  bool _syncingMusicQueue = false;
   Json androidState = {}, permissions = {};
   Future<void> _queue = Future.value();
   bool get android => Platform.isAndroid;
@@ -101,7 +116,7 @@ class AppController extends ChangeNotifier {
         '${Platform.operatingSystem}-${uuid.v4()}';
     await store.put('device', device);
     completedCycle = (await store.get('cycle') as int?) ?? 0;
-    tracks = ((await store.get('tracks') as List?) ?? []).map(asJson).toList();
+    await loadMusicLibrary();
     volume = (await store.get('volume') as num?)?.toDouble() ?? .6;
     await refresh();
     if (android) {
@@ -109,8 +124,7 @@ class AppController extends ChangeNotifier {
       await native.invokeMethod('recover');
       await pollAndroid();
       permissions = asJson(await native.invokeMethod('permissions'));
-      await native.invokeMethod('playlist',
-          {'tracks': tracks, 'index': trackIndex, 'volume': volume});
+      await syncMusicQueue(keepPosition: true, resume: playing);
     } else {
       player = Player();
       player!.stream.error.listen((e) {
@@ -122,11 +136,14 @@ class AppController extends ChangeNotifier {
         notifyListeners();
       });
       player!.stream.playlist.listen((v) {
-        trackIndex = v.index;
+        if (_syncingMusicQueue || !queueMatchesPlaylist(v)) return;
+        if (v.index >= 0 && v.index < v.medias.length) {
+          trackIndex = canonicalTrackIndex(v.medias[v.index].uri);
+        }
         notifyListeners();
       });
       try {
-        await _loadWindowsPlaylist();
+        await syncMusicQueue();
       } catch (e) {
         message = '音乐加载失败，请在音乐库重新添加文件：$e';
       }
@@ -305,7 +322,11 @@ class AppController extends ChangeNotifier {
   Future<void> pollAndroid() async {
     androidState = asJson(await native.invokeMethod('state'));
     playing = androidState['musicPlaying'] == true;
-    trackIndex = (androidState['trackIndex'] as num?)?.toInt() ?? 0;
+    if (androidState['playlistId'] == null ||
+        androidState['playlistId'] == '' ||
+        androidState['playlistId'] == currentPlaylist.id) {
+      trackIndex = (androidState['trackIndex'] as num?)?.toInt() ?? 0;
+    }
     final error = androidState['error'] as String? ?? '';
     if (error.isNotEmpty) message = error;
     final events =
@@ -600,36 +621,276 @@ class AppController extends ChangeNotifier {
     } catch (_) {/* A cached file may still be in use. */}
   }
 
-  Future<void> saveTracks() async {
-    await store.put('tracks', tracks);
-    if (android) {
-      await native.invokeMethod('playlist',
-          {'tracks': tracks, 'index': trackIndex, 'volume': volume});
+  Future<void> loadMusicLibrary() async {
+    final saved = await store.get('musicLibrary');
+    if (saved == null) {
+      final legacy =
+          ((await store.get('tracks') as List?) ?? []).map(asJson).toList();
+      final migrated = MusicLibrary.legacy(legacy);
+      await store.put('musicLibrary', migrated.toJson());
+      musicLibrary = migrated;
     } else {
-      await _loadWindowsPlaylist();
+      musicLibrary = MusicLibrary.fromJson(asJson(saved));
     }
   }
 
-  Future<void> _loadWindowsPlaylist() async {
-    if (tracks.isEmpty) {
-      await player?.stop();
-      return;
+  String? playlistNameError(String? value, {String? exceptId}) {
+    final name = value?.trim() ?? '';
+    if (name.isEmpty || name.length > 80) return '填写 1–80 字的歌单名称';
+    if (playlists.any((p) =>
+        p.id != exceptId && p.name.toLowerCase() == name.toLowerCase())) {
+      return '已有同名歌单';
     }
+    return null;
+  }
+
+  Future<void> _applyMusicLibrary(MusicLibrary value,
+      {bool reload = true, bool? resume}) async {
+    final oldId = currentPlaylist.id;
+    final oldPath = tracks.isEmpty ? null : tracks[trackIndex]['path'];
     final wasPlaying = playing;
-    await player!.open(
-        Playlist(tracks.map((t) => Media(t['path'] as String)).toList(),
-            index: trackIndex.clamp(0, tracks.length - 1)),
-        play: wasPlaying && canPlayMusic && !muted);
-    await player!.setVolume(volume * 100);
-    await player!.setPlaylistMode(repeat == 'one'
-        ? PlaylistMode.single
-        : repeat == 'all'
-            ? PlaylistMode.loop
-            : PlaylistMode.none);
-    await player!.setShuffle(shuffle);
+    await store.put('musicLibrary', value.toJson());
+    musicLibrary = value;
+    if (reload) {
+      try {
+        await syncMusicQueue(
+            resume: resume ?? wasPlaying,
+            keepPosition: oldId == currentPlaylist.id &&
+                tracks.isNotEmpty &&
+                oldPath == tracks[trackIndex]['path']);
+      } catch (_) {
+        playing = false;
+        try {
+          if (android) {
+            await native.invokeMethod('music', {'action': 'stop'});
+          } else {
+            await player?.stop();
+          }
+        } catch (_) {/* Report the load failure without changing the clock. */}
+        message = '歌单已保存，音乐暂时无法加载，请检查文件后重试。计时继续。';
+      }
+    }
+    notifyListeners();
+  }
+
+  Future<String> createPlaylist(String name) async {
+    final error = playlistNameError(name);
+    if (error != null) throw FormatException(error);
+    final next = musicLibrary.copy();
+    final id = uuid.v4();
+    next.playlists.add(MusicPlaylist(id: id, name: name.trim()));
+    next.selectedId = id;
+    next.index = 0;
+    await _applyMusicLibrary(next, resume: false);
+    return id;
+  }
+
+  Future<void> renamePlaylist(String id, String name) async {
+    final error = playlistNameError(name, exceptId: id);
+    if (error != null) throw FormatException(error);
+    final next = musicLibrary.copy();
+    next.playlists.firstWhere((p) => p.id == id).name = name.trim();
+    await _applyMusicLibrary(next, reload: false);
+  }
+
+  Future<void> selectPlaylist(String id) async {
+    if (id == currentPlaylist.id) return;
+    if (!playlists.any((p) => p.id == id)) throw const FormatException('歌单不存在');
+    final next = musicLibrary.copy();
+    next.selectedId = id;
+    next.index = 0;
+    await _applyMusicLibrary(next);
+  }
+
+  Future<void> deletePlaylist(String id) async {
+    final next = musicLibrary.copy();
+    if (!next.playlists.any((p) => p.id == id)) return;
+    final wasCurrent = id == next.selectedId;
+    next.playlists.removeWhere((p) => p.id == id);
+    if (next.playlists.isEmpty) {
+      next.playlists.add(MusicPlaylist(id: uuid.v4(), name: '默认歌单'));
+    }
+    if (wasCurrent) {
+      next.selectedId = next.playlists.first.id;
+      next.index = 0;
+    }
+    await _applyMusicLibrary(next, reload: wasCurrent, resume: false);
+  }
+
+  String _musicPathKey(String value) => musicMediaKey(value);
+  void _retainSelectedTrack(MusicLibrary next, String? id) {
+    final index = next.current.tracks.indexWhere((t) => t['id'] == id);
+    next.index = next.current.tracks.isEmpty
+        ? 0
+        : index >= 0
+            ? index
+            : next.index.clamp(0, next.current.tracks.length - 1);
+  }
+
+  Future<void> importMusicFiles(String playlistId, List<Json> files) async {
+    final next = musicLibrary.copy();
+    final target = next.playlists.firstWhere((p) => p.id == playlistId);
+    int added = 0;
+    for (final file in files) {
+      final source = file['path'] as String, name = file['name'] as String;
+      Json? shared;
+      if (android) {
+        for (final list in next.playlists) {
+          shared = list.tracks
+              .where((t) => t['sourcePath'] == source || t['path'] == source)
+              .firstOrNull;
+          if (shared != null && await File(shared['path'] as String).exists()) {
+            break;
+          }
+          shared = null;
+        }
+      }
+      var path = shared?['path'] as String? ?? source;
+      if (target.tracks.any(
+          (t) => _musicPathKey(t['path'] as String) == _musicPathKey(path))) {
+        continue;
+      }
+      if (android && shared == null) {
+        final folder = await Directory(p.join(dataDirectory.path, 'music'))
+            .create(recursive: true);
+        path = p.join(folder.path, '${uuid.v4()}${p.extension(name)}');
+        await File(source).copy(path);
+      }
+      target.tracks.add({
+        'id': uuid.v4(),
+        'name': name,
+        'path': path,
+        if (android) 'sourcePath': source
+      });
+      added++;
+    }
+    message =
+        added == 0 ? '当前歌单中已有这些歌曲，未重复添加。' : '已向“${target.name}”添加 $added 首歌曲。';
+    await _applyMusicLibrary(next, reload: playlistId == currentPlaylist.id);
+  }
+
+  Future<void> removeTrack(String playlistId, String trackId) async {
+    final selectedId =
+        tracks.isEmpty ? null : tracks[trackIndex]['id'] as String;
+    final next = musicLibrary.copy();
+    next.playlists
+        .firstWhere((p) => p.id == playlistId)
+        .tracks
+        .removeWhere((t) => t['id'] == trackId);
+    _retainSelectedTrack(next, selectedId);
+    await _applyMusicLibrary(next, reload: playlistId == currentPlaylist.id);
+  }
+
+  Future<void> transferTrack(String fromId, String trackId, String toId,
+      {required bool copy}) async {
+    if (fromId == toId) return;
+    final selectedId =
+        tracks.isEmpty ? null : tracks[trackIndex]['id'] as String;
+    final next = musicLibrary.copy();
+    final source = next.playlists.firstWhere((p) => p.id == fromId);
+    final destination = next.playlists.firstWhere((p) => p.id == toId);
+    final track = source.tracks.firstWhere((t) => t['id'] == trackId);
+    if (!destination.tracks.any((t) =>
+        _musicPathKey(t['path'] as String) ==
+        _musicPathKey(track['path'] as String))) {
+      destination.tracks.add({...track, 'id': uuid.v4()});
+    }
+    if (!copy) source.tracks.removeWhere((t) => t['id'] == trackId);
+    _retainSelectedTrack(next, selectedId);
+    await _applyMusicLibrary(next,
+        reload: (!copy && fromId == currentPlaylist.id) ||
+            toId == currentPlaylist.id);
+  }
+
+  // Compatibility for isolated native probes; normal UI edits clone the library.
+  Future<void> saveTracks() => _applyMusicLibrary(musicLibrary.copy());
+
+  Future<void> syncMusicQueue(
+      {bool resume = false, bool keepPosition = false}) async {
+    final canResume = resume && canPlayMusic && !muted && tracks.isNotEmpty;
+    _syncingMusicQueue = true;
+    try {
+      if (android) {
+        await native.invokeMethod('playlist', {
+          'playlistId': currentPlaylist.id,
+          'tracks': tracks,
+          'index': trackIndex,
+          'volume': volume,
+          'play': canResume,
+          'keepPosition': keepPosition,
+          'shuffle': shuffle,
+          'repeat': repeat,
+          'muted': muted
+        });
+        await pollAndroid();
+      } else if (player != null) {
+        final position = keepPosition ? player!.state.position : Duration.zero;
+        await player!.pause();
+        if (tracks.isEmpty) {
+          await player!.stop();
+          playing = false;
+          return;
+        }
+        await player!.open(
+            Playlist(tracks.map((t) => Media(t['path'] as String)).toList(),
+                index: trackIndex),
+            play: false);
+        await player!.setVolume(volume * 100);
+        await player!.setPlaylistMode(repeat == 'one'
+            ? PlaylistMode.single
+            : repeat == 'all'
+                ? PlaylistMode.loop
+                : PlaylistMode.none);
+        await player!.setShuffle(shuffle);
+        if (position > Duration.zero) await player!.seek(position);
+        if (canResume) await player!.play();
+        playing = canResume;
+      }
+    } finally {
+      _syncingMusicQueue = false;
+    }
+  }
+
+  String musicMediaKey(String value) {
+    if (value.startsWith('file:')) {
+      try {
+        value = Uri.parse(value).toFilePath(windows: Platform.isWindows);
+      } catch (_) {}
+    }
+    if (Platform.isWindows) {
+      value = value.replaceAll('\\', '/');
+      if (value.startsWith('//?/')) value = value.substring(4);
+      if (value.startsWith('UNC/')) value = '//${value.substring(4)}';
+      return p.windows.normalize(value).toLowerCase();
+    }
+    return p.posix.normalize(value);
+  }
+
+  int canonicalTrackIndex(String uri) => tracks.indexWhere(
+      (t) => musicMediaKey(t['path'] as String) == musicMediaKey(uri));
+
+  bool queueMatchesPlaylist(Playlist queue) {
+    if (queue.medias.length != tracks.length) return false;
+    final allowed = <String, int>{};
+    for (final track in tracks) {
+      final key = musicMediaKey(track['path'] as String);
+      allowed.update(key, (n) => n + 1, ifAbsent: () => 1);
+    }
+    for (final media in queue.medias) {
+      final key = musicMediaKey(media.uri),
+          count = allowed[musicMediaKey(media.uri)] ?? 0;
+      if (count == 0) return false;
+      allowed[key] = count - 1;
+    }
+    return true;
   }
 
   Future<void> music(String action, [Object? value]) async {
+    if (tracks.isEmpty &&
+        ['toggle', 'next', 'previous', 'select'].contains(action)) {
+      message = '当前歌单没有歌曲，请先在音乐库添加。';
+      return;
+    }
     if (action == 'volume') {
       volume = value as double;
       await store.put('volume', volume);
@@ -643,6 +904,13 @@ class AppController extends ChangeNotifier {
               : 'all';
     }
     if (action == 'mute') muted = !muted;
+    if (['shuffle', 'repeat', 'select'].contains(action)) {
+      if (action == 'select') {
+        if (value is! int || value < 0 || value >= tracks.length) return;
+        trackIndex = value;
+      }
+      await store.put('musicLibrary', musicLibrary.toJson());
+    }
     if (android) {
       await native.invokeMethod('music', {
         'action': action,
@@ -655,6 +923,24 @@ class AppController extends ChangeNotifier {
       return;
     }
     if (player == null || tracks.isEmpty) return;
+    if (['toggle', 'next', 'previous', 'select'].contains(action) &&
+        !queueMatchesPlaylist(player!.state.playlist)) {
+      await syncMusicQueue();
+    }
+    if (['next', 'previous', 'select'].contains(action) &&
+        (!canPlayMusic || muted)) {
+      if (action != 'select') {
+        final queue = player!.state.playlist;
+        final next = (queue.index + (action == 'next' ? 1 : -1));
+        final index = repeat == 'all'
+            ? next % queue.medias.length
+            : next.clamp(0, queue.medias.length - 1);
+        trackIndex = canonicalTrackIndex(queue.medias[index].uri);
+      }
+      await store.put('musicLibrary', musicLibrary.toJson());
+      await syncMusicQueue();
+      return;
+    }
     switch (action) {
       case 'toggle':
         if (playing) {
@@ -672,7 +958,16 @@ class AppController extends ChangeNotifier {
       case 'previous':
         await player!.previous();
       case 'select':
-        await player!.jump(value as int);
+        final uri = musicMediaKey(tracks[value as int]['path'] as String);
+        final index = player!.state.playlist.medias
+            .indexWhere((m) => musicMediaKey(m.uri) == uri);
+        if (index < 0) throw const FormatException('歌曲不在当前歌单中');
+        await player!.jump(index);
+        if (canPlayMusic && !muted) {
+          await player!.play();
+        } else {
+          await player!.pause();
+        }
       case 'volume':
         await player!.setVolume(volume * 100);
       case 'shuffle':
@@ -690,7 +985,7 @@ class AppController extends ChangeNotifier {
           await player!.play();
         }
     }
-    if (!canPlayMusic) await player!.pause();
+    if (!canPlayMusic || muted) await player!.pause();
   }
 
   Future<void> shutdown() async {

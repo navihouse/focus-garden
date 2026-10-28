@@ -308,21 +308,45 @@ class FocusRuntime private constructor(private val context: Context) {
         events = JSONArray((0 until events.length()).filter { events.getJSONObject(it).getString("id") != id }.map { events.getJSONObject(it) })
         persist()
     }
+    private var playlistId = ""
     fun playlist(args: JSONObject) {
         val wasPlaying = player.isPlaying
+        val oldIndex = player.currentMediaItemIndex
+        val oldUri = player.currentMediaItem?.localConfiguration?.uri
+        val position = player.currentPosition
+        player.pause()
         val tracks = args.getJSONArray("tracks")
-        val media = (0 until tracks.length()).map { MediaItem.fromUri(File(tracks.getJSONObject(it).getString("path")).toURI().toString()) }
-        if(media.isEmpty()) { player.clearMediaItems(); return }
-        player.setMediaItems(media, args.optInt("index").coerceIn(0, max(0, media.size - 1)), 0)
+        val media = (0 until tracks.length()).map {
+            val track = tracks.getJSONObject(it)
+            MediaItem.Builder().setUri(File(track.getString("path")).toURI().toString()).setMediaId(track.getString("id")).build()
+        }
+        val nextId = args.optString("playlistId", "")
+        val index = args.optInt("index").coerceIn(0, max(0, media.size - 1))
+        val keep = args.optBoolean("keepPosition") && nextId == playlistId && oldIndex >= 0 &&
+            media.getOrNull(index)?.localConfiguration?.uri == oldUri
+        playlistId = nextId
+        muted = args.optBoolean("muted", muted)
+        player.shuffleModeEnabled = args.optBoolean("shuffle", player.shuffleModeEnabled)
+        player.repeatMode = when(args.optString("repeat", "all")) { "one" -> Player.REPEAT_MODE_ONE; "off" -> Player.REPEAT_MODE_OFF; else -> Player.REPEAT_MODE_ALL }
         player.volume = args.optDouble("volume", .6).toFloat()
-        if(media.isNotEmpty()) { player.prepare(); if(wasPlaying && phase == "focus" && !muted) player.play() }
+        if(media.isEmpty()) { player.clearMediaItems(); return }
+        player.setMediaItems(media, index, if(keep) position else 0L)
+        player.prepare()
+        if(args.optBoolean("play", wasPlaying) && phase == "focus" && !muted) player.play()
     }
     fun music(args: JSONObject) {
         when(args.getString("action")) {
+            "stop" -> { player.pause(); player.clearMediaItems() }
             "toggle" -> if(player.isPlaying) player.pause() else if(phase == "focus" && !muted) player.play()
             "next" -> player.seekToNextMediaItem()
             "previous" -> player.seekToPreviousMediaItem()
-            "select" -> { val i = args.getInt("value"); if(i in 0 until player.mediaItemCount) player.seekTo(i, 0) }
+            "select" -> {
+                val i = args.getInt("value")
+                if(i in 0 until player.mediaItemCount) {
+                    player.seekTo(i, 0)
+                    if(phase == "focus" && !muted) player.play() else player.pause()
+                }
+            }
             "volume" -> player.volume = args.getDouble("value").toFloat()
             "shuffle" -> player.shuffleModeEnabled = args.getBoolean("shuffle")
             "repeat" -> player.repeatMode = when(args.getString("repeat")) { "one" -> Player.REPEAT_MODE_ONE; "off" -> Player.REPEAT_MODE_OFF; else -> Player.REPEAT_MODE_ALL }
@@ -336,7 +360,7 @@ class FocusRuntime private constructor(private val context: Context) {
             .put("durationMs", if(isRest) restDuration else plannedMs).put("taskName", taskName()).put("cycle", cycle)
             .put("livePromoted", Build.VERSION.SDK_INT >= 36 && context.getSystemService(NotificationManager::class.java)
                 .activeNotifications.any { it.id == 7 && (it.notification.flags and Notification.FLAG_PROMOTED_ONGOING) != 0 })
-            .put("musicPlaying", player.isPlaying).put("trackIndex", max(0, player.currentMediaItemIndex))
+            .put("playlistId", playlistId).put("musicPlaying", player.isPlaying).put("trackIndex", max(0, player.currentMediaItemIndex))
             .put("events", JSONArray(events.toString())).put("error", error.also { error = "" })
     }
     private fun JSONObject.removeAndReturn(key: String): JSONObject { remove(key); return this }

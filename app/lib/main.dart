@@ -9,6 +9,7 @@ import 'package:path/path.dart' as p;
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 import 'app_controller.dart';
+import 'music_library_page.dart';
 import 'app_background.dart';
 import 'hotkey_editor.dart';
 import 'domain/hotkey.dart';
@@ -474,9 +475,24 @@ class _HomeState extends State<Home> {
                     Text(value, style: Theme.of(context).textTheme.titleLarge)
                   ]))));
   Widget musicControls() => Column(children: [
+        DropdownButtonFormField<String>(
+            key: ValueKey('playing-playlist-${c.currentPlaylist.id}'),
+            initialValue: c.currentPlaylist.id,
+            isExpanded: true,
+            decoration: const InputDecoration(labelText: '播放歌单'),
+            items: c.playlists
+                .map((p) => DropdownMenuItem(
+                    value: p.id,
+                    child: Text(p.name,
+                        maxLines: 1, overflow: TextOverflow.ellipsis)))
+                .toList(),
+            onChanged: (id) {
+              if (id != null) c.perform(() => c.selectPlaylist(id));
+            }),
+        const SizedBox(height: 12),
         Text(
             c.tracks.isEmpty
-                ? '还没有音乐，可以前往音乐库添加'
+                ? '当前歌单为空，可前往音乐库添加歌曲'
                 : c.tracks[c.trackIndex.clamp(0, c.tracks.length - 1)]['name']
                     as String,
             maxLines: 1,
@@ -689,77 +705,7 @@ class _HomeState extends State<Home> {
     }
   }
 
-  Widget musicPage() => ListView(padding: const EdgeInsets.all(24), children: [
-        Row(children: [
-          Expanded(
-              child: Text('你的本地音乐',
-                  style: Theme.of(context).textTheme.titleLarge)),
-          FilledButton.icon(
-              onPressed: addMusic,
-              icon: const Icon(Icons.add),
-              label: const Text('添加文件'))
-        ]),
-        const SizedBox(height: 8),
-        Text(c.android
-            ? '音乐会复制到本应用的本地音乐库，重启后仍可播放。卸载应用会删除副本。'
-            : '使用原文件路径；移动文件后请重新添加。音乐不会进入备份文件。'),
-        const SizedBox(height: 20),
-        section('播放器', musicControls()),
-        const SizedBox(height: 8),
-        Text(c.android
-            ? '开始专注后可播放音乐；暂停计时、结束或休息时会自动暂停。'
-            : '导入后可直接点击播放试听，不会生成专注记录。暂停计时、结束或休息时会自动暂停音乐。'),
-        const SizedBox(height: 20),
-        if (c.tracks.isEmpty)
-          const Padding(
-              padding: EdgeInsets.all(40),
-              child: Text('选择 MP3、FLAC、WAV 或 M4A 文件。专注开始时会自动播放。')),
-        ...c.tracks.indexed.map((entry) => ListTile(
-            leading: Icon(entry.$1 == c.trackIndex && c.playing
-                ? Icons.graphic_eq
-                : Icons.music_note_outlined),
-            title: Text(entry.$2['name'] as String),
-            subtitle: Text(entry.$2['path'] as String,
-                maxLines: 1, overflow: TextOverflow.ellipsis),
-            onTap: () => c.perform(() => c.music('select', entry.$1)),
-            trailing: IconButton(
-                tooltip: '从音乐库移除',
-                icon: const Icon(Icons.close),
-                onPressed: () => c.perform(() async {
-                      final removed = c.tracks.removeAt(entry.$1);
-                      c.trackIndex = 0;
-                      await c.saveTracks();
-                      if (c.android) {
-                        final file = File(removed['path'] as String);
-                        if (await file.exists()) await file.delete();
-                      }
-                    })))),
-      ]);
-  Future<void> addMusic() async {
-    await c.perform(() async {
-      final files = await FilePicker.platform.pickFiles(
-          allowMultiple: true,
-          type: FileType.custom,
-          allowedExtensions: ['mp3', 'flac', 'wav', 'm4a', 'ogg', 'aac']);
-      if (files == null) return;
-      for (final file in files.files) {
-        if (file.path == null) continue;
-        String path = file.path!;
-        if (c.android) {
-          final folder = Directory(p.join(c.dataDirectory.path, 'music'));
-          await folder.create(recursive: true);
-          path = p.join(folder.path,
-              '${AppController.uuid.v4()}${p.extension(file.name)}');
-          await File(file.path!).copy(path);
-        }
-        if (!c.tracks.any((t) => t['path'] == path)) {
-          c.tracks.add(
-              {'id': AppController.uuid.v4(), 'name': file.name, 'path': path});
-        }
-      }
-      await c.saveTracks();
-    });
-  }
+  Widget musicPage() => MusicLibraryPage(c, playerBuilder: musicControls);
 
   Future<void> settingsDialog() async {
     final form = GlobalKey<FormState>();
