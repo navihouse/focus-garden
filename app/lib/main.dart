@@ -1502,11 +1502,13 @@ class _ReportsPageState extends State<ReportsPage> {
                     : '${((report.milliseconds / previous.milliseconds - 1) * 100).toStringAsFixed(1)}%'),
       ]),
       const SizedBox(height: 20),
-      panel(kind == PeriodKind.year ? '每月专注趋势（分钟）' : '每日专注趋势（分钟）',
-          BarChart(chart)),
+      if (kind == PeriodKind.month)
+        panel('每日专注概览', MonthlyFocusOverview(report))
+      else
+        panel(kind == PeriodKind.year ? '每月专注趋势（分钟）' : '每日专注趋势（分钟）',
+            BarChart(chart)),
       if (kind == PeriodKind.month)
         panel('每周投入（以周一日期标识，仅累计本月部分）', BarChart(report.weekly)),
-      if (kind == PeriodKind.month) panel('本月专注热力图', Heatmap(report)),
       if (kind == PeriodKind.year) panel('全年专注热力图', Heatmap(report)),
       panel('科目 / 项目分布', breakdown(report.category)),
       panel('任务投入', breakdown(report.tasks)),
@@ -1529,6 +1531,50 @@ class _ReportsPageState extends State<ReportsPage> {
                 '计时反映投入时间，不直接衡量学习效果。跨日记录按时间区间分配时长；完成数归入结束日期；平均单次按本期有投入的记录计算，只累计本期部分。')
           ])),
     ]);
+  }
+}
+
+class MonthlyFocusOverview extends StatelessWidget {
+  final Report report;
+  const MonthlyFocusOverview(this.report, {super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final daily = <String, int>{
+      for (var d = report.period.start;
+          d.isBefore(report.period.end);
+          d = d.add(const Duration(days: 1)))
+        '${d.month}/${d.day}': report.daily[dayKey(d)] ?? 0,
+    };
+    Widget section(String title, Widget child) =>
+        Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(title, style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 18),
+          child,
+        ]);
+    return LayoutBuilder(builder: (context, constraints) {
+      final heatmap = section('本月专注热力图', Heatmap(report));
+      final trend = section(
+          '每日专注趋势（分钟）',
+          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            BarChart(daily),
+            const SizedBox(height: 8),
+            Text('横向拖动底部滚动条查看全部日期；悬停或点击柱形查看当天时长。',
+                style: Theme.of(context).textTheme.bodySmall),
+          ]));
+      if (constraints.maxWidth >= 700) {
+        return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          SizedBox(width: 280, child: heatmap),
+          const SizedBox(width: 28),
+          Expanded(child: trend),
+        ]);
+      }
+      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        heatmap,
+        const SizedBox(height: 28),
+        trend,
+      ]);
+    });
   }
 }
 
