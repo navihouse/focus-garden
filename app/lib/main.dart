@@ -1506,6 +1506,7 @@ class _ReportsPageState extends State<ReportsPage> {
           BarChart(chart)),
       if (kind == PeriodKind.month)
         panel('每周投入（以周一日期标识，仅累计本月部分）', BarChart(report.weekly)),
+      if (kind == PeriodKind.month) panel('本月专注热力图', Heatmap(report)),
       if (kind == PeriodKind.year) panel('全年专注热力图', Heatmap(report)),
       panel('科目 / 项目分布', breakdown(report.category)),
       panel('任务投入', breakdown(report.tasks)),
@@ -1540,15 +1541,22 @@ class Heatmap extends StatelessWidget {
     final gridStart = first.subtract(Duration(days: first.weekday - 1));
     final weeks = (report.period.end.difference(gridStart).inDays / 7).ceil();
     final maxMs = math.max(1, report.daily.values.fold<int>(0, math.max));
-    return SingleChildScrollView(
+    final monthly = report.period.kind == PeriodKind.month;
+    final cellSize = monthly ? 32.0 : 14.0;
+    final colors = Theme.of(context).colorScheme;
+    Color intensity(int value) => value == 0
+        ? colors.surfaceContainerHighest
+        : colors.primary.withValues(alpha: .25 + .75 * value / maxMs);
+    final grid = SingleChildScrollView(
         scrollDirection: Axis.horizontal,
         child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Column(children: [
             for (final d in ['一', '二', '三', '四', '五', '六', '日'])
               SizedBox(
                   width: 20,
-                  height: 17,
-                  child: Text(d, style: const TextStyle(fontSize: 10)))
+                  height: cellSize + 3,
+                  child: Center(
+                      child: Text(d, style: const TextStyle(fontSize: 10))))
           ]),
           for (var w = 0; w < weeks; w++)
             Column(children: [
@@ -1558,29 +1566,61 @@ class Heatmap extends StatelessWidget {
                   final value = report.daily[dayKey(date)] ?? 0;
                   final within =
                       !date.isBefore(first) && date.isBefore(report.period.end);
-                  return Tooltip(
-                      message:
-                          within ? '${dayKey(date)}：${minutes(value)} 分钟' : '',
-                      child: Container(
-                          width: 14,
-                          height: 14,
-                          margin: const EdgeInsets.all(1.5),
-                          decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(2),
-                              color: !within
-                                  ? Colors.transparent
-                                  : value == 0
-                                      ? Theme.of(context)
-                                          .colorScheme
-                                          .surfaceContainerHighest
-                                      : Theme.of(context)
-                                          .colorScheme
-                                          .primary
-                                          .withValues(
-                                              alpha:
-                                                  .25 + .75 * value / maxMs))));
+                  final description = '${dayKey(date)}：${minutes(value)} 分钟';
+                  final cell = Container(
+                      key: within ? ValueKey('heatmap-${dayKey(date)}') : null,
+                      width: cellSize,
+                      height: cellSize,
+                      alignment: Alignment.center,
+                      margin: const EdgeInsets.all(1.5),
+                      decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(2),
+                          color:
+                              !within ? Colors.transparent : intensity(value)),
+                      child: monthly && within
+                          ? Text('${date.day}',
+                              style: TextStyle(
+                                  fontSize: 11,
+                                  color: value == maxMs
+                                      ? colors.onPrimary
+                                      : colors.onSurface))
+                          : null);
+                  if (!within) return cell;
+                  return Semantics(
+                      label: description,
+                      child: Tooltip(
+                          message: description,
+                          triggerMode: TooltipTriggerMode.tap,
+                          excludeFromSemantics: true,
+                          child: ExcludeSemantics(child: cell)));
                 })
             ]),
         ]));
+    if (!monthly) return grid;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      grid,
+      const SizedBox(height: 14),
+      Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            const Text('少', style: TextStyle(fontSize: 11)),
+            for (final fraction in [0.0, .25, .5, .75, 1.0])
+              Container(
+                  width: 14,
+                  height: 14,
+                  decoration: BoxDecoration(
+                      color: intensity((maxMs * fraction).round()),
+                      borderRadius: BorderRadius.circular(2))),
+            const Text('多', style: TextStyle(fontSize: 11)),
+          ]),
+      const SizedBox(height: 8),
+      Text(
+          report.milliseconds == 0
+              ? '本月暂无有效专注记录。点击或悬停日期可查看时长。'
+              : '颜色按本月每日投入相对深浅显示，空格为月外日期。点击或悬停日期查看分钟数。',
+          style: Theme.of(context).textTheme.bodySmall),
+    ]);
   }
 }
