@@ -73,11 +73,11 @@ void main() {
     }
     if (errors.isNotEmpty) throw StateError(errors.join('\n'));
     await c.music('repeat'); // all -> one
-    await c.music('repeat'); // one -> off
+    await c.music('repeat'); // one -> all
     await c.music('shuffle');
     await c.saveTracks();
     await Future<void>.delayed(const Duration(milliseconds: 250));
-    final retained = c.player!.state.playlistMode == PlaylistMode.none &&
+    final retained = c.player!.state.playlistMode == PlaylistMode.loop &&
         c.player!.state.shuffle;
     if (!retained) throw StateError('Playlist edit reset repeat/shuffle modes');
     await c.shutdown();

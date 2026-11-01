@@ -238,7 +238,20 @@ class Settings {
   final String? backgroundPath;
   final double backgroundOpacity;
   final double cardTransparency;
-  final HotkeyBinding musicHotkey, timerHotkey;
+  final HotkeyBinding musicHotkey, timerHotkey, previousHotkey, nextHotkey;
+  Map<String, HotkeyBinding> get hotkeys => {
+        'music': musicHotkey,
+        'timer': timerHotkey,
+        'previous': previousHotkey,
+        'next': nextHotkey,
+      };
+  bool get validHotkeys {
+    final bindings = hotkeys.values.toList();
+    return bindings.every((b) => b.valid) &&
+        {for (final b in bindings) '${b.modifiers}:${b.keyCode}'}.length ==
+            bindings.length;
+  }
+
   final Map<String, int> goals;
   const Settings(
       {this.focus = 25,
@@ -250,6 +263,8 @@ class Settings {
       this.cardTransparency = .65,
       this.musicHotkey = HotkeyBinding.musicDefault,
       this.timerHotkey = HotkeyBinding.timerDefault,
+      this.previousHotkey = HotkeyBinding.previousDefault,
+      this.nextHotkey = HotkeyBinding.nextDefault,
       this.goals = const {}});
   Json toJson() => {
         'focus': focus,
@@ -261,6 +276,8 @@ class Settings {
         'cardTransparency': cardTransparency,
         'musicHotkey': musicHotkey.toJson(),
         'timerHotkey': timerHotkey.toJson(),
+        'previousHotkey': previousHotkey.toJson(),
+        'nextHotkey': nextHotkey.toJson(),
         'goals': goals
       };
   factory Settings.fromJson(Json j) => Settings(
@@ -279,5 +296,9 @@ class Settings {
           HotkeyBinding.fromJson(j['musicHotkey'], HotkeyBinding.musicDefault),
       timerHotkey:
           HotkeyBinding.fromJson(j['timerHotkey'], HotkeyBinding.timerDefault),
+      previousHotkey: HotkeyBinding.fromJson(
+          j['previousHotkey'], HotkeyBinding.previousDefault),
+      nextHotkey:
+          HotkeyBinding.fromJson(j['nextHotkey'], HotkeyBinding.nextDefault),
       goals: Map<String, int>.from(j['goals'] as Map));
 }

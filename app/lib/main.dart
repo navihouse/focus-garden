@@ -528,8 +528,7 @@ class _HomeState extends State<Home> {
                       c.shuffle ? Theme.of(context).colorScheme.primary : null,
                   icon: const Icon(Icons.shuffle)),
               IconButton(
-                  tooltip:
-                      '循环：${{'all': '列表', 'one': '单曲', 'off': '关闭'}[c.repeat]}',
+                  tooltip: '循环：${{'all': '列表', 'one': '单曲'}[c.repeat]}',
                   onPressed: () => c.perform(() => c.music('repeat')),
                   icon:
                       Icon(c.repeat == 'one' ? Icons.repeat_one : Icons.repeat),
@@ -722,7 +721,9 @@ class _HomeState extends State<Home> {
     double backgroundOpacity = c.settings.backgroundOpacity;
     double cardTransparency = c.settings.cardTransparency;
     HotkeyBinding musicHotkey = c.settings.musicHotkey,
-        timerHotkey = c.settings.timerHotkey;
+        timerHotkey = c.settings.timerHotkey,
+        previousHotkey = c.settings.previousHotkey,
+        nextHotkey = c.settings.nextHotkey;
     final stagedBackgrounds = <String>{};
     bool importingBackground = false;
     bool dialogClosed = false;
@@ -972,8 +973,27 @@ class _HomeState extends State<Home> {
                                                   timerHotkey = v;
                                                   saveError = null;
                                                 })),
-                                        if (c.hotkeyStatus['music'] == false ||
-                                            c.hotkeyStatus['timer'] == false)
+                                        HotkeySetting(
+                                            key: const ValueKey(
+                                                'previous-hotkey'),
+                                            title: '音乐前一首',
+                                            binding: previousHotkey,
+                                            controller: c,
+                                            onChanged: (v) => update(() {
+                                                  previousHotkey = v;
+                                                  saveError = null;
+                                                })),
+                                        HotkeySetting(
+                                            key: const ValueKey('next-hotkey'),
+                                            title: '音乐后一首',
+                                            binding: nextHotkey,
+                                            controller: c,
+                                            onChanged: (v) => update(() {
+                                                  nextHotkey = v;
+                                                  saveError = null;
+                                                })),
+                                        if (c.hotkeyStatus.values
+                                            .contains(false))
                                           const Text('部分快捷键被其他程序占用，请修改后保存。'),
                                         TextButton(
                                             key:
@@ -983,10 +1003,14 @@ class _HomeState extends State<Home> {
                                                       .musicDefault;
                                                   timerHotkey = HotkeyBinding
                                                       .timerDefault;
+                                                  previousHotkey = HotkeyBinding
+                                                      .previousDefault;
+                                                  nextHotkey =
+                                                      HotkeyBinding.nextDefault;
                                                   saveError = null;
                                                 }),
                                             child: const Text('恢复默认快捷键')),
-                                        const Text('修改后点击保存生效；两组按键不能相同。'),
+                                        const Text('修改后点击保存生效；四组按键不能相同。'),
                                         const Text('计时快捷键不会从待机状态自动开始新番茄钟。'),
                                         SwitchListTile.adaptive(
                                             key: const ValueKey(
@@ -1056,8 +1080,13 @@ class _HomeState extends State<Home> {
                               ? null
                               : () async {
                                   if (!form.currentState!.validate()) return;
-                                  if (musicHotkey.sameAs(timerHotkey)) {
-                                    update(() => saveError = '音乐和计时的快捷键不能相同。');
+                                  if (!Settings(
+                                          musicHotkey: musicHotkey,
+                                          timerHotkey: timerHotkey,
+                                          previousHotkey: previousHotkey,
+                                          nextHotkey: nextHotkey)
+                                      .validHotkeys) {
+                                    update(() => saveError = '四组快捷键不能相同。');
                                     return;
                                   }
                                   update(() {
@@ -1076,6 +1105,8 @@ class _HomeState extends State<Home> {
                                           cardTransparency: cardTransparency,
                                           musicHotkey: musicHotkey,
                                           timerHotkey: timerHotkey,
+                                          previousHotkey: previousHotkey,
+                                          nextHotkey: nextHotkey,
                                           goals: {
                                             for (final e in goals.entries)
                                               if (e.value.text.isNotEmpty)

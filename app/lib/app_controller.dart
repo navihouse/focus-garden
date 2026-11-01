@@ -168,7 +168,7 @@ class AppController extends ChangeNotifier {
           }
           await refreshDesktopIntegration();
           hotkeyStatus = await registerHotkeys(settings, initial: true);
-          if (hotkeyStatus['music'] != true || hotkeyStatus['timer'] != true) {
+          if (settings.hotkeys.keys.any((key) => hotkeyStatus[key] != true)) {
             message = '部分全局快捷键被其他程序占用，请在设置中查看。';
           }
         } catch (e) {
@@ -507,22 +507,29 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> saveSettings(Settings value) async {
-    if (!value.musicHotkey.valid ||
-        !value.timerHotkey.valid ||
-        value.musicHotkey.sameAs(value.timerHotkey)) {
-      throw const FormatException('两组快捷键必须不同，且包含 Ctrl 或 Alt 和一个受支持的按键。');
+    if (!value.validHotkeys) {
+      throw const FormatException('四组快捷键必须不同，且包含 Ctrl 或 Alt 和一个受支持的按键。');
     }
     final oldSettings = settings;
-    final hotkeysChanged = !value.musicHotkey.sameAs(settings.musicHotkey) ||
-        !value.timerHotkey.sameAs(settings.timerHotkey);
+    final hotkeysChanged = value.hotkeys.entries
+        .any((entry) => !entry.value.sameAs(settings.hotkeys[entry.key]!));
     if (Platform.isWindows &&
         (hotkeysChanged || hotkeyStatus.values.contains(false))) {
       final status = await registerHotkeys(value);
       if (status['accepted'] != true) {
         hotkeyStatus = asJson(status['restored']);
         notifyListeners();
-        throw FormatException(
-            '${status['music'] == false ? '音乐' : '计时'}快捷键被系统或其他程序占用，请换一组按键。原设置已保留。');
+        const labels = {
+          'music': '音乐播放 / 暂停',
+          'timer': '计时',
+          'previous': '前一首',
+          'next': '后一首'
+        };
+        final failed = labels.entries
+            .where((e) => status[e.key] == false)
+            .map((e) => e.value)
+            .join('、');
+        throw FormatException('$failed快捷键被系统或其他程序占用，请换一组按键。原设置已保留。');
       }
       hotkeyStatus = status;
     }
@@ -544,13 +551,14 @@ class AppController extends ChangeNotifier {
   Future<void> handleHotkey(String action) async {
     if (_capturingHotkey) return;
     if (action == 'music') await music('toggle');
+    if (action == 'previous' || action == 'next') await music(action);
     if (action == 'timer' && active) await pauseResume();
   }
 
   Future<Json> registerHotkeys(Settings value, {bool initial = false}) async =>
       asJson(await native.invokeMethod('registerHotkeys', {
-        'music': value.musicHotkey.toJson(),
-        'timer': value.timerHotkey.toJson(),
+        for (final entry in value.hotkeys.entries)
+          entry.key: entry.value.toJson(),
         'initial': initial,
       }));
 
@@ -567,7 +575,7 @@ class AppController extends ChangeNotifier {
   Future<void> resumeHotkeys() async {
     try {
       hotkeyStatus = asJson(await native.invokeMethod('resumeHotkeys'));
-      if (hotkeyStatus['music'] == false || hotkeyStatus['timer'] == false) {
+      if (settings.hotkeys.keys.any((key) => hotkeyStatus[key] == false)) {
         message = '部分快捷键被其他程序占用，请在设置中重新设置。';
       }
     } finally {
@@ -836,11 +844,8 @@ class AppController extends ChangeNotifier {
                 index: trackIndex),
             play: false);
         await player!.setVolume(volume * 100);
-        await player!.setPlaylistMode(repeat == 'one'
-            ? PlaylistMode.single
-            : repeat == 'all'
-                ? PlaylistMode.loop
-                : PlaylistMode.none);
+        await player!.setPlaylistMode(
+            repeat == 'one' ? PlaylistMode.single : PlaylistMode.loop);
         await player!.setShuffle(shuffle);
         if (position > Duration.zero) await player!.seek(position);
         if (canResume) await player!.play();
@@ -897,11 +902,7 @@ class AppController extends ChangeNotifier {
     }
     if (action == 'shuffle') shuffle = !shuffle;
     if (action == 'repeat') {
-      repeat = repeat == 'all'
-          ? 'one'
-          : repeat == 'one'
-              ? 'off'
-              : 'all';
+      repeat = repeat == 'all' ? 'one' : 'all';
     }
     if (action == 'mute') muted = !muted;
     if (['shuffle', 'repeat', 'select'].contains(action)) {
@@ -973,11 +974,8 @@ class AppController extends ChangeNotifier {
       case 'shuffle':
         await player!.setShuffle(shuffle);
       case 'repeat':
-        await player!.setPlaylistMode(repeat == 'one'
-            ? PlaylistMode.single
-            : repeat == 'all'
-                ? PlaylistMode.loop
-                : PlaylistMode.none);
+        await player!.setPlaylistMode(
+            repeat == 'one' ? PlaylistMode.single : PlaylistMode.loop);
       case 'mute':
         if (muted) {
           await player!.pause();

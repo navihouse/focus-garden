@@ -270,7 +270,7 @@ void main() {
     expect((sent.last['tracks'] as List).single['id'], 'a');
     expect(sent.last['play'], true);
     expect(sent.last['shuffle'], true);
-    expect(sent.last['repeat'], 'off');
+    expect(sent.last['repeat'], 'all');
     android.androidState = {...state, 'phase': 'rest', 'isRest': true};
     android.playing = true;
     await android.selectPlaylist(second);

@@ -6,6 +6,15 @@ import 'package:media_kit/media_kit.dart' show MediaKit;
 import 'package:focus_garden/app_controller.dart';
 import 'package:focus_garden/domain/timer_engine.dart';
 
+class PlaylistProbeController extends AppController {
+  final hotkeyActions = <String>[];
+  @override
+  Future<void> handleHotkey(String action) async {
+    hotkeyActions.add(action);
+    await super.handleHotkey(action);
+  }
+}
+
 Future<void> main() async {
   final directory = Platform.environment['FOCUS_PLAYLIST_PROBE_DIR'];
   if (directory == null || Platform.environment['FOCUS_NATIVE_PROBE'] != '1') {
@@ -24,7 +33,7 @@ Future<void> main() async {
       final playlist = c?.player?.state.playlist;
       throw StateError(
           '$name; canonical=${c?.trackIndex}; native=${playlist?.index}; '
-          'uris=${playlist?.medias.map((m) => m.uri).toList()}; repeat=${c?.repeat}; shuffle=${c?.shuffle}; message=${c?.message}');
+          'uris=${playlist?.medias.map((m) => m.uri).toList()}; repeat=${c?.repeat}; shuffle=${c?.shuffle}; message=${c?.message}; hotkeyActions=${c is PlaylistProbeController ? c.hotkeyActions : null}');
     }
   }
 
@@ -32,7 +41,7 @@ Future<void> main() async {
     WidgetsFlutterBinding.ensureInitialized();
     MediaKit.ensureInitialized();
     runApp(const SizedBox.shrink());
-    final c = AppController();
+    final c = PlaylistProbeController();
     controller = c;
     await c.initialize(directory: Directory('$directory/data'));
     c.volume = 0;
@@ -66,10 +75,44 @@ Future<void> main() async {
         'automaticNextStaysInFolder', () => current() == c.musicMediaKey(b));
     await waitFor(
         'folderLoopReturnsToFirst', () => current() == c.musicMediaKey(a));
+    await waitFor(
+        'secondCycleReachesLast', () => current() == c.musicMediaKey(b));
+    await waitFor(
+        'secondCycleReturnsToFirst', () => current() == c.musicMediaKey(a));
+    if (c.hotkeyStatus['previous'] != true || c.hotkeyStatus['next'] != true) {
+      throw StateError(
+          'Track hotkeys unavailable; no keyboard input will be sent');
+    }
+    await File('$directory/shortcut-previous-ready').writeAsString('{}');
+    await waitFor(
+        'rightArrowDispatchesPrevious',
+        () =>
+            c.hotkeyActions.contains('previous') &&
+            current() == c.musicMediaKey(b));
+    await File('$directory/shortcut-next-ready').writeAsString('{}');
+    await waitFor(
+        'leftArrowDispatchesNext',
+        () =>
+            c.hotkeyActions.contains('next') &&
+            current() == c.musicMediaKey(a));
+    await c.perform(() => c.music('repeat')); // list -> single
+    await c.perform(() => c.music('select', 1));
+    await waitFor(
+        'singleLoopNearsEnd',
+        () =>
+            current() == c.musicMediaKey(b) &&
+            c.player!.state.position.inMilliseconds > 3200);
+    await waitFor(
+        'singleLoopRestartsSameTrack',
+        () =>
+            current() == c.musicMediaKey(b) &&
+            c.player!.state.position.inMilliseconds < 700 &&
+            c.playing);
+    await c.perform(() => c.music('repeat')); // single -> list, never off
     checks['outsideNotQueued'] =
         !queue().contains(c.musicMediaKey(outside)) && queue().length == 2;
     await c.perform(() => c.music('shuffle'));
-    for (var i = 0; i < 3; i++) {
+    for (var i = 0; i < 2; i++) {
       await c.perform(() => c.music('repeat'));
       await c.perform(() => c.music('select', 1));
       await waitFor('shuffledSelect$i',
@@ -93,6 +136,9 @@ Future<void> main() async {
     await c.perform(() => c.music('toggle'));
     await c.perform(() => c.startFocus(testSeconds: 90));
     await c.perform(c.pauseResume);
+    await c.perform(() => c.handleHotkey('next'));
+    checks['pausedTrackShortcutKeepsTimerPaused'] =
+        !c.playing && c.phase == Phase.paused;
     await c.perform(() => c.selectPlaylist(second));
     await c.perform(() => c.music('select', 0));
     await waitFor(

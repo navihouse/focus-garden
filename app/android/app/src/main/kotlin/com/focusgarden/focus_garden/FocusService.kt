@@ -327,7 +327,7 @@ class FocusRuntime private constructor(private val context: Context) {
         playlistId = nextId
         muted = args.optBoolean("muted", muted)
         player.shuffleModeEnabled = args.optBoolean("shuffle", player.shuffleModeEnabled)
-        player.repeatMode = when(args.optString("repeat", "all")) { "one" -> Player.REPEAT_MODE_ONE; "off" -> Player.REPEAT_MODE_OFF; else -> Player.REPEAT_MODE_ALL }
+        player.repeatMode = when(args.optString("repeat", "all")) { "one" -> Player.REPEAT_MODE_ONE; else -> Player.REPEAT_MODE_ALL }
         player.volume = args.optDouble("volume", .6).toFloat()
         if(media.isEmpty()) { player.clearMediaItems(); return }
         player.setMediaItems(media, index, if(keep) position else 0L)
@@ -349,7 +349,7 @@ class FocusRuntime private constructor(private val context: Context) {
             }
             "volume" -> player.volume = args.getDouble("value").toFloat()
             "shuffle" -> player.shuffleModeEnabled = args.getBoolean("shuffle")
-            "repeat" -> player.repeatMode = when(args.getString("repeat")) { "one" -> Player.REPEAT_MODE_ONE; "off" -> Player.REPEAT_MODE_OFF; else -> Player.REPEAT_MODE_ALL }
+            "repeat" -> player.repeatMode = when(args.getString("repeat")) { "one" -> Player.REPEAT_MODE_ONE; else -> Player.REPEAT_MODE_ALL }
             "mute" -> { muted = args.getBoolean("muted"); if(muted) player.pause() else if(phase == "focus") player.play() }
         }
         if(phase != "focus") player.pause()

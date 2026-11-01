@@ -21,11 +21,15 @@ HotkeyBinding? bindingForKey(LogicalKeyboardKey key,
   final label = key.keyLabel.toUpperCase();
   final code = key == LogicalKeyboardKey.space
       ? 0x20
-      : functions.contains(key)
-          ? 0x70 + functions.indexOf(key)
-          : label.length == 1
-              ? label.codeUnitAt(0)
-              : 0;
+      : key == LogicalKeyboardKey.arrowLeft
+          ? 0x25
+          : key == LogicalKeyboardKey.arrowRight
+              ? 0x27
+              : functions.contains(key)
+                  ? 0x70 + functions.indexOf(key)
+                  : label.length == 1
+                      ? label.codeUnitAt(0)
+                      : 0;
   final result =
       HotkeyBinding((control ? 2 : 0) | (alt ? 1 : 0) | (shift ? 4 : 0), code);
   return result.valid ? result : null;
@@ -87,7 +91,8 @@ class _CaptureDialogState extends State<_CaptureDialog> {
                 alt: keyboard.isAltPressed,
                 shift: keyboard.isShiftPressed);
         if (binding == null) {
-          setState(() => error = '请按 Ctrl 或 Alt，加字母、数字、空格或 F1–F11；可同时按 Shift。');
+          setState(() =>
+              error = '请按 Ctrl 或 Alt，加字母、数字、空格、左右方向键或 F1–F11；可同时按 Shift。');
         } else {
           Navigator.pop(context, binding);
         }
@@ -95,8 +100,8 @@ class _CaptureDialogState extends State<_CaptureDialog> {
       },
       child: AlertDialog(
           title: const Text('按下新的快捷键'),
-          content: Text(
-              error ?? '按 Ctrl 或 Alt，加字母、数字、空格或 F1–F11；可同时按 Shift。\n按 Esc 取消。'),
+          content: Text(error ??
+              '按 Ctrl 或 Alt，加字母、数字、空格、左右方向键或 F1–F11；可同时按 Shift。\n按 Esc 取消。'),
           actions: [
             TextButton(
                 onPressed: () => Navigator.pop(context),

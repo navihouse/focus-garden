@@ -48,6 +48,8 @@ Future<void> main() async {
     const custom = Settings(
         musicHotkey: HotkeyBinding(6, 0x78),
         timerHotkey: HotkeyBinding(3, 0x78),
+        previousHotkey: HotkeyBinding(6, 0x7a),
+        nextHotkey: HotkeyBinding(3, 0x7a),
         cardTransparency: .8);
     await c.saveSettings(custom);
     c.engine.start(
@@ -67,12 +69,16 @@ Future<void> main() async {
     bool rejected = false;
     try {
       await c.saveSettings(const Settings(
-          musicHotkey: HotkeyBinding(6, 0x79),
-          timerHotkey: HotkeyBinding(3, 0x79)));
+          musicHotkey: HotkeyBinding(6, 0x78),
+          timerHotkey: HotkeyBinding(3, 0x78),
+          previousHotkey: HotkeyBinding(6, 0x79),
+          nextHotkey: HotkeyBinding(3, 0x7a)));
     } on FormatException {
       rejected = true;
     }
-    if (!rejected || !c.settings.musicHotkey.sameAs(custom.musicHotkey)) {
+    if (!rejected ||
+        !c.settings.musicHotkey.sameAs(custom.musicHotkey) ||
+        c.settings.hotkeys.keys.any((key) => c.hotkeyStatus[key] != true)) {
       throw StateError('Conflict rollback failed');
     }
     await marker('rollback-ready');
@@ -99,6 +105,7 @@ Future<void> main() async {
       'ok': true,
       'globalMusicAndTimer': true,
       'conflictRollback': true,
+      'newTrackBindingConflictRollsBackAllFour': true,
       'newBindingDispatched': true,
       'persisted': true,
     }));

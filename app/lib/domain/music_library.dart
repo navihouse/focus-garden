@@ -80,7 +80,7 @@ class MusicLibrary {
         selectedId: json['selectedId'],
         index: json['index'] is int ? json['index'] as int : 0,
         shuffle: json['shuffle'] == true,
-        repeat: ['all', 'one', 'off'].contains(json['repeat'])
+        repeat: ['all', 'one'].contains(json['repeat'])
             ? json['repeat'] as String
             : 'all');
     result.index = result.current.tracks.isEmpty
