@@ -14,8 +14,105 @@ import 'package:focus_garden/notes_controller.dart';
 import 'package:focus_garden/notes_editor.dart';
 import 'package:focus_garden/task_editor.dart';
 
+Future<Offset> linkPoint(WidgetTester tester) async {
+  final field = find.byKey(const ValueKey('task-notes'));
+  await tester.ensureVisible(field);
+  await tester.pumpAndSettle();
+  final editable = tester.state<EditableTextState>(
+      find.descendant(of: field, matching: find.byType(EditableText)));
+  final box = editable.renderEditable
+      .getBoxesForSelection(const TextSelection(baseOffset: 0, extentOffset: 1))
+      .first
+      .toRect();
+  return editable.renderEditable.localToGlobal(box.center);
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  test('only HTTP(S) note URLs are accepted and mixed backups round-trip', () {
+    const url = 'https://example.com/reading?unit=1#notes';
+    const fakeUserInfo = 'fixture:placeholder';
+    expect(webLinkUrl('  HTTPS://Example.COM/reading?unit=1#notes  '), url);
+    expect(webLinkUrl('http://localhost:8080/'), 'http://localhost:8080/');
+    for (final invalid in [
+      'example.com',
+      'file:///C:/a.txt',
+      'javascript:alert(1)',
+      'https:///path',
+      'https://$fakeUserInfo@example.com',
+      'https://@example.com',
+      'https://example.com:65536',
+      'https://example.com/has space',
+      r'https://example.com\other',
+    ]) {
+      expect(webLinkUrl(invalid), isNull, reason: invalid);
+    }
+    final task = TaskItem(
+        id: 'mixed',
+        name: '资料',
+        notes: '讲义 网页',
+        noteLinks: const [
+          NoteFileLink(0, 2, r'D:\Study\lesson.pdf'),
+          NoteFileLink(3, 5, url),
+        ],
+        modified: DateTime.utc(2026));
+    final backup = exportBackup([task], []);
+    final json = jsonDecode(backup) as Map;
+    expect(json['version'], 5);
+    expect(previewBackup(backup, [], []).tasks.single.sameAs(task), true);
+    expect(() => previewBackup(jsonEncode({...json, 'version': 4}), [], []),
+        throwsFormatException);
+  });
+
+  testWidgets('insert and rename a web link; only Ctrl click opens the URL',
+      (tester) async {
+    const url = 'https://example.com/reading?unit=1#notes';
+    final notes = NotesController('', []);
+    addTearDown(notes.dispose);
+    final calls = <MethodCall>[];
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(AppController.native, (call) async {
+      calls.add(call);
+      return null;
+    });
+    addTearDown(
+        () => messenger.setMockMethodCallHandler(AppController.native, null));
+    await tester.pumpWidget(
+        MaterialApp(home: Scaffold(body: NotesEditor(controller: notes))));
+    await tester.tap(find.byKey(const ValueKey('add-note-web-link')));
+    await tester.pumpAndSettle();
+    final address = find.byKey(const ValueKey('link-path'));
+    await tester.enterText(address, 'file:///C:/a.txt');
+    await tester.tap(find.text('插入'));
+    await tester.pumpAndSettle();
+    expect(find.text('填写完整的 HTTP 或 HTTPS 地址'), findsOneWidget);
+    await tester.enterText(address, url);
+    await tester.enterText(find.byKey(const ValueKey('link-label')), 'Reading');
+    await tester.tap(find.text('插入'));
+    await tester.pumpAndSettle();
+    expect(notes.text, 'Reading');
+    await tester.tapAt(await linkPoint(tester));
+    await tester.pumpAndSettle();
+    expect(calls, isEmpty);
+    await tester.tapAt(await linkPoint(tester),
+        buttons: kSecondaryMouseButton, kind: PointerDeviceKind.mouse);
+    await tester.pumpAndSettle();
+    expect(find.text('打开网页'), findsOneWidget);
+    await tester.tap(find.text('修改链接显示名称'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const ValueKey('link-name')), 'Source');
+    await tester.tap(find.text('确定'));
+    await tester.pumpAndSettle();
+    expect(notes.text, 'Source');
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.tapAt(await linkPoint(tester));
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pumpAndSettle();
+    expect(calls.single.method, 'openWebLink');
+    expect(calls.single.arguments, {'url': url});
+  });
+
   test(
       'adjacent links and emoji keep independent aliases through insert, delete and undo',
       () {
@@ -173,7 +270,7 @@ void main() {
     for (final links in [
       [const NoteFileLink(-1, 3, r'D:\a.txt')],
       [const NoteFileLink(0, 9, r'D:\a.txt')],
-      [const NoteFileLink(0, 3, 'https://example.com')],
+      [const NoteFileLink(0, 3, 'javascript:alert(1)')],
       [
         const NoteFileLink(0, 3, r'D:\a.txt'),
         const NoteFileLink(2, 4, r'D:\b.txt')
@@ -246,20 +343,6 @@ void main() {
     expect(find.text('删除任务'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
-
-  Future<Offset> linkPoint(WidgetTester tester) async {
-    final field = find.byKey(const ValueKey('task-notes'));
-    await tester.ensureVisible(field);
-    await tester.pumpAndSettle();
-    final editable = tester.state<EditableTextState>(
-        find.descendant(of: field, matching: find.byType(EditableText)));
-    final box = editable.renderEditable
-        .getBoxesForSelection(
-            const TextSelection(baseOffset: 0, extentOffset: 1))
-        .first
-        .toRect();
-    return editable.renderEditable.localToGlobal(box.center);
-  }
 
   for (final brightness in Brightness.values) {
     testWidgets(

@@ -110,8 +110,8 @@ class TaskItem {
       if (link.start < previousEnd ||
           link.end <= link.start ||
           link.end > t.notes.length ||
-          localFilePath(link.target) != link.target) {
-        throw const FormatException('备注链接越界、重叠或文件地址无效');
+          noteLinkTarget(link.target) != link.target) {
+        throw const FormatException('备注链接越界、重叠或地址无效');
       }
       previousEnd = link.end;
     }

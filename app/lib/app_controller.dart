@@ -54,9 +54,7 @@ class AppController extends ChangeNotifier {
       startupCurrentPath = false,
       startMenuAvailable = false;
   String get repeat => musicLibrary.repeat;
-  set repeat(String value) => musicLibrary.repeat = value;
   bool get shuffle => musicLibrary.shuffle;
-  set shuffle(bool value) => musicLibrary.shuffle = value;
   Map<String, dynamic> hotkeyStatus = {};
   bool _capturingHotkey = false;
   double volume = .6;
@@ -844,15 +842,27 @@ class AppController extends ChangeNotifier {
                 index: trackIndex),
             play: false);
         await player!.setVolume(volume * 100);
-        await player!.setPlaylistMode(
-            repeat == 'one' ? PlaylistMode.single : PlaylistMode.loop);
-        await player!.setShuffle(shuffle);
+        await _applyDesktopMusicMode();
         if (position > Duration.zero) await player!.seek(position);
         if (canResume) await player!.play();
         playing = canResume;
       }
     } finally {
       _syncingMusicQueue = false;
+    }
+  }
+
+  Future<void> _applyDesktopMusicMode() async {
+    final p = player!;
+    switch (musicLibrary.mode) {
+      case MusicPlaybackMode.shuffle:
+        await p.setPlaylistMode(PlaylistMode.none);
+        await p.setShuffle(true);
+      case MusicPlaybackMode.playlistLoop:
+      case MusicPlaybackMode.singleLoop:
+        await p.setShuffle(false);
+        await p.setPlaylistMode(
+            repeat == 'one' ? PlaylistMode.single : PlaylistMode.loop);
     }
   }
 
@@ -900,16 +910,22 @@ class AppController extends ChangeNotifier {
       volume = value as double;
       await store.put('volume', volume);
     }
-    if (action == 'shuffle') shuffle = !shuffle;
-    if (action == 'repeat') {
-      repeat = repeat == 'all' ? 'one' : 'all';
+    if (action == 'shuffle' || action == 'repeat') {
+      final updated = musicLibrary.copy();
+      updated.mode = action == 'shuffle'
+          ? (shuffle
+              ? MusicPlaybackMode.playlistLoop
+              : MusicPlaybackMode.shuffle)
+          : (repeat == 'all'
+              ? MusicPlaybackMode.singleLoop
+              : MusicPlaybackMode.playlistLoop);
+      await store.put('musicLibrary', updated.toJson());
+      musicLibrary.mode = updated.mode;
     }
     if (action == 'mute') muted = !muted;
-    if (['shuffle', 'repeat', 'select'].contains(action)) {
-      if (action == 'select') {
-        if (value is! int || value < 0 || value >= tracks.length) return;
-        trackIndex = value;
-      }
+    if (action == 'select') {
+      if (value is! int || value < 0 || value >= tracks.length) return;
+      trackIndex = value;
       await store.put('musicLibrary', musicLibrary.toJson());
     }
     if (android) {
@@ -972,10 +988,8 @@ class AppController extends ChangeNotifier {
       case 'volume':
         await player!.setVolume(volume * 100);
       case 'shuffle':
-        await player!.setShuffle(shuffle);
       case 'repeat':
-        await player!.setPlaylistMode(
-            repeat == 'one' ? PlaylistMode.single : PlaylistMode.loop);
+        await _applyDesktopMusicMode();
       case 'mute':
         if (muted) {
           await player!.pause();

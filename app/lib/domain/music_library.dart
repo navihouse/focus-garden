@@ -32,18 +32,24 @@ class MusicPlaylist {
   }
 }
 
+enum MusicPlaybackMode { playlistLoop, singleLoop, shuffle }
+
 class MusicLibrary {
   final List<MusicPlaylist> playlists;
   String selectedId;
   int index;
-  bool shuffle;
-  String repeat;
+  MusicPlaybackMode mode;
+  bool get shuffle => mode == MusicPlaybackMode.shuffle;
+  String get repeat => switch (mode) {
+        MusicPlaybackMode.playlistLoop => 'all',
+        MusicPlaybackMode.singleLoop => 'one',
+        MusicPlaybackMode.shuffle => 'off',
+      };
   MusicLibrary(
       {required this.playlists,
       required this.selectedId,
       this.index = 0,
-      this.shuffle = false,
-      this.repeat = 'all'});
+      this.mode = MusicPlaybackMode.playlistLoop});
   factory MusicLibrary.empty() => MusicLibrary(
       playlists: [MusicPlaylist(id: 'default', name: '默认歌单')],
       selectedId: 'default');
@@ -79,10 +85,11 @@ class MusicLibrary {
         playlists: playlists,
         selectedId: json['selectedId'],
         index: json['index'] is int ? json['index'] as int : 0,
-        shuffle: json['shuffle'] == true,
-        repeat: ['all', 'one'].contains(json['repeat'])
-            ? json['repeat'] as String
-            : 'all');
+        mode: json['shuffle'] == true
+            ? MusicPlaybackMode.shuffle
+            : json['repeat'] == 'one'
+                ? MusicPlaybackMode.singleLoop
+                : MusicPlaybackMode.playlistLoop);
     result.index = result.current.tracks.isEmpty
         ? 0
         : result.index.clamp(0, result.current.tracks.length - 1);

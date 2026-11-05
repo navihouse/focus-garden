@@ -13,6 +13,7 @@ import wave
 parser = argparse.ArgumentParser()
 parser.add_argument('executable', type=Path)
 parser.add_argument('results', type=Path)
+parser.add_argument('--skip-shortcuts', action='store_true')
 args = parser.parse_args()
 folder = args.results.resolve()
 folder.mkdir(parents=True, exist_ok=True)
@@ -41,7 +42,8 @@ def track_shortcut(key):
 try:
     with (folder/'runtime.log').open('w',encoding='utf-8') as log:
         process = subprocess.Popen([str(args.executable.resolve()),'--autostart'],cwd=args.executable.resolve().parent,
-            env=dict(os.environ,FOCUS_NATIVE_PROBE='1',FOCUS_PLAYLIST_PROBE_DIR=str(folder)),
+            env=dict(os.environ,FOCUS_NATIVE_PROBE='1',FOCUS_PLAYLIST_PROBE_DIR=str(folder),
+                FOCUS_PROBE_SKIP_SHORTCUTS=str(int(args.skip_shortcuts))),
             creationflags=subprocess.CREATE_NO_WINDOW,stdout=log,stderr=log)
         deadline=time.monotonic()+120
         while not (folder/'result.json').exists():

@@ -11,6 +11,7 @@ import android.provider.Settings
 import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
 import java.io.File
+import java.net.URI
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -33,6 +34,15 @@ class MainActivity : FlutterActivity() {
                             val type = MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension.lowercase()) ?: "application/octet-stream"
                             startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, type)
                                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+                            result.success(null)
+                        }
+                        "openWebLink" -> {
+                            val url = args["url"] as String
+                            val parsed = URI(url)
+                            require(url.length <= 4096 && (parsed.scheme == "http" || parsed.scheme == "https") &&
+                                !parsed.host.isNullOrBlank() && parsed.rawUserInfo == null &&
+                                (parsed.port == -1 || parsed.port in 1..65535)) { "Expected an HTTP or HTTPS URL" }
+                            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addCategory(Intent.CATEGORY_BROWSABLE))
                             result.success(null)
                         }
                         "taskCompleted" -> {

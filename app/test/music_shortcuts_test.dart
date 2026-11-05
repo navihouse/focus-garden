@@ -147,10 +147,17 @@ void main() {
     expect(saved.nextHotkey.keyCode, 0x42);
   });
 
-  test('legacy off becomes list loop; repeat cycles list and single only',
+  test('playback modes are exclusive, including after a legacy import',
       () async {
     final old = MusicLibrary.empty().toJson()..['repeat'] = 'off';
     expect(MusicLibrary.fromJson(old).repeat, 'all');
+    final legacyConflict = MusicLibrary.fromJson({
+      ...old,
+      'shuffle': true,
+      'repeat': 'all',
+    });
+    expect(legacyConflict.shuffle, true);
+    expect(legacyConflict.repeat, 'off');
     final c = AppController()
       ..store = LocalStore.testing(NativeDatabase.memory());
     addTearDown(c.store.close);
@@ -158,8 +165,21 @@ void main() {
     expect(c.repeat, 'all');
     await c.music('repeat');
     expect(c.repeat, 'one');
+    expect(c.shuffle, false);
+    await c.music('shuffle');
+    expect(c.shuffle, true);
+    expect(c.repeat, 'off');
+    final saved =
+        MusicLibrary.fromJson(asJson(await c.store.get('musicLibrary')));
+    expect(saved.shuffle, true);
+    expect(saved.repeat, 'off');
     await c.music('repeat');
     expect(c.repeat, 'all');
+    expect(c.shuffle, false);
+    await c.music('shuffle');
+    expect(c.repeat, 'off');
+    await c.music('shuffle');
+    expect(c.shuffle, false);
     expect(
         MusicLibrary.fromJson(asJson(await c.store.get('musicLibrary'))).repeat,
         'all');

@@ -522,13 +522,14 @@ class _HomeState extends State<Home> {
                       : () => c.perform(() => c.music('next')),
                   icon: const Icon(Icons.skip_next)),
               IconButton(
-                  tooltip: '随机播放',
+                  tooltip: '随机播放（播完停止）',
                   onPressed: () => c.perform(() => c.music('shuffle')),
                   color:
                       c.shuffle ? Theme.of(context).colorScheme.primary : null,
                   icon: const Icon(Icons.shuffle)),
               IconButton(
-                  tooltip: '循环：${{'all': '列表', 'one': '单曲'}[c.repeat]}',
+                  tooltip:
+                      '循环：${{'all': '列表', 'one': '单曲', 'off': '关闭'}[c.repeat]}',
                   onPressed: () => c.perform(() => c.music('repeat')),
                   icon:
                       Icon(c.repeat == 'one' ? Icons.repeat_one : Icons.repeat),

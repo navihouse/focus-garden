@@ -89,14 +89,13 @@ void main() {
     final first = c.currentPlaylist.id;
     final second = await c.createPlaylist('雨声');
     await c.importMusicFiles(second, [song('rain')]);
-    c.shuffle = true;
-    c.repeat = 'one';
+    await c.music('repeat');
     c.playing = true;
     await c.selectPlaylist(first);
     expect(c.queues.last, ['D:/StudyMusic/a.wav', 'D:/StudyMusic/b.wav']);
     expect(c.playing, true);
     expect(c.trackIndex, 0);
-    expect(c.shuffle, true);
+    expect(c.shuffle, false);
     expect(c.repeat, 'one');
     final reloads = c.queues.length;
     await c.renamePlaylist(first, '轻音乐');
@@ -233,6 +232,7 @@ void main() {
     addTearDown(android.store.close);
     addTearDown(android.dispose);
     final sent = <Json>[];
+    final actions = <Json>[];
     Json state = {
       'phase': 'focus',
       'musicPlaying': true,
@@ -251,6 +251,7 @@ void main() {
         };
       }
       if (call.method == 'state') return state;
+      if (call.method == 'music') actions.add(asJson(call.arguments));
       return null;
     });
     addTearDown(() => TestDefaultBinaryMessengerBinding
@@ -263,14 +264,16 @@ void main() {
     final second = await android.createPlaylist('Only rain');
     android.tracks = [song('rain')];
     await android.saveTracks();
+    await android.music('shuffle');
     android.playing = true;
-    android.shuffle = true;
-    android.repeat = 'off';
     await android.selectPlaylist(first);
     expect((sent.last['tracks'] as List).single['id'], 'a');
     expect(sent.last['play'], true);
     expect(sent.last['shuffle'], true);
-    expect(sent.last['repeat'], 'all');
+    expect(sent.last['repeat'], 'off');
+    await android.music('repeat');
+    expect(actions.map((a) => (a['shuffle'], a['repeat'])),
+        [(true, 'off'), (false, 'all')]);
     android.androidState = {...state, 'phase': 'rest', 'isRest': true};
     android.playing = true;
     await android.selectPlaylist(second);

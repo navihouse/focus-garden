@@ -52,12 +52,15 @@ class _NotesEditorState extends State<NotesEditor> {
 
   Future<void> openLink(NoteFileLink link) async {
     try {
-      await AppController.native
-          .invokeMethod('openLocalFile', {'path': link.target});
+      await AppController.native.invokeMethod(
+          link.isWeb ? 'openWebLink' : 'openLocalFile',
+          {link.isWeb ? 'url' : 'path': link.target});
       if (mounted) setState(() => error = null);
     } catch (_) {
       if (mounted) {
-        setState(() => error = '无法打开文件，请确认文件在当前设备上存在、可访问，且已安装对应的打开程序。');
+        setState(() => error = link.isWeb
+            ? '无法打开网页，请确认设备已安装浏览器。'
+            : '无法打开文件，请确认文件在当前设备上存在、可访问，且已安装对应的打开程序。');
       }
     }
   }
@@ -117,14 +120,15 @@ class _NotesEditorState extends State<NotesEditor> {
     name.dispose();
   }
 
-  Future<void> addLink() async {
+  Future<void> addLink({bool web = false}) async {
     final path = TextEditingController(), label = TextEditingController();
     final form = GlobalKey<FormState>();
     String? cachedSource;
+    final normalize = web ? webLinkUrl : localFilePath;
     final route = DialogRoute<(String, String)>(
         context: context,
         builder: (ctx) => AlertDialog(
-                title: const Text('添加本地文件链接'),
+                title: Text(web ? '添加网页链接' : '添加本地文件链接'),
                 content: SizedBox(
                     width: 440,
                     child: Form(
@@ -137,27 +141,32 @@ class _NotesEditorState extends State<NotesEditor> {
                                   key: const ValueKey('link-path'),
                                   controller: path,
                                   maxLines: 3,
-                                  decoration:
-                                      const InputDecoration(labelText: '文件地址'),
-                                  validator: (v) =>
-                                      localFilePath(v ?? '') == null
-                                          ? '填写完整的本地文件地址'
-                                          : null),
-                              TextButton.icon(
-                                  onPressed: () async {
-                                    final files =
-                                        await FilePicker.platform.pickFiles();
-                                    final file = files?.files.single;
-                                    if (file?.path != null && ctx.mounted) {
-                                      path.text = file!.path!;
-                                      cachedSource = file.path;
-                                      if (label.text.isEmpty) {
-                                        label.text = file.name;
+                                  keyboardType: web ? TextInputType.url : null,
+                                  decoration: InputDecoration(
+                                      labelText: web ? '网页地址' : '文件地址',
+                                      hintText:
+                                          web ? 'https://example.com' : null),
+                                  validator: (v) => normalize(v ?? '') == null
+                                      ? (web
+                                          ? '填写完整的 HTTP 或 HTTPS 地址'
+                                          : '填写完整的本地文件地址')
+                                      : null),
+                              if (!web)
+                                TextButton.icon(
+                                    onPressed: () async {
+                                      final files =
+                                          await FilePicker.platform.pickFiles();
+                                      final file = files?.files.single;
+                                      if (file?.path != null && ctx.mounted) {
+                                        path.text = file!.path!;
+                                        cachedSource = file.path;
+                                        if (label.text.isEmpty) {
+                                          label.text = file.name;
+                                        }
                                       }
-                                    }
-                                  },
-                                  icon: const Icon(Icons.folder_open),
-                                  label: const Text('选择本地文件')),
+                                    },
+                                    icon: const Icon(Icons.folder_open),
+                                    label: const Text('选择本地文件')),
                               TextFormField(
                                   key: const ValueKey('link-label'),
                                   controller: label,
@@ -176,8 +185,8 @@ class _NotesEditorState extends State<NotesEditor> {
                   FilledButton(
                       onPressed: () {
                         if (form.currentState!.validate()) {
-                          Navigator.pop(ctx,
-                              (localFilePath(path.text)!, label.text.trim()));
+                          Navigator.pop(
+                              ctx, (normalize(path.text)!, label.text.trim()));
                         }
                       },
                       child: const Text('插入'))
@@ -189,7 +198,7 @@ class _NotesEditorState extends State<NotesEditor> {
     if (result == null || !mounted) return;
     String target = result.$1;
     String display = result.$2.isEmpty
-        ? p.basename(target.replaceAll('\\', '/'))
+        ? (web ? target : p.basename(target.replaceAll('\\', '/')))
         : result.$2;
     if (display.isEmpty) display = target;
     final controller = widget.controller;
@@ -201,13 +210,13 @@ class _NotesEditorState extends State<NotesEditor> {
                 (selected.end - selected.start) +
                 display.length >
             10000) {
-      setState(() => error = '备注最多 10000 字、200 个文件链接。');
+      setState(() => error = '备注最多 10000 字、200 个链接。');
       return;
     }
     try {
       // Android document pickers return a temporary cached copy. Own a stable copy
       // inside the app's note-files directory; Windows keeps the original path.
-      if (Platform.isAndroid && target == cachedSource) {
+      if (!web && Platform.isAndroid && target == cachedSource) {
         final root = await getApplicationSupportDirectory();
         final directory = await Directory(p.join(root.path, 'note-files'))
             .create(recursive: true);
@@ -256,7 +265,7 @@ class _NotesEditorState extends State<NotesEditor> {
                                     unawaited(rename(link));
                                   }),
                               ContextMenuButtonItem(
-                                  label: '打开文件',
+                                  label: link.isWeb ? '打开网页' : '打开文件',
                                   onPressed: () {
                                     state.hideToolbar();
                                     unawaited(openLink(link));
@@ -274,15 +283,22 @@ class _NotesEditorState extends State<NotesEditor> {
                         : widget.controller.links.length > 200
                             ? '备注最多 200 个链接'
                             : null))),
-        TextButton.icon(
-            key: const ValueKey('add-note-link'),
-            onPressed: addLink,
-            icon: const Icon(Icons.add_link),
-            label: const Text('添加本地文件链接')),
+        Wrap(spacing: 8, children: [
+          TextButton.icon(
+              key: const ValueKey('add-note-link'),
+              onPressed: addLink,
+              icon: const Icon(Icons.add_link),
+              label: const Text('添加本地文件链接')),
+          TextButton.icon(
+              key: const ValueKey('add-note-web-link'),
+              onPressed: () => addLink(web: true),
+              icon: const Icon(Icons.link),
+              label: const Text('添加网页链接')),
+        ]),
         Text(
             Platform.isWindows
-                ? 'Ctrl + 单击打开文件；右键链接可修改显示名称。编辑后请保存任务。'
-                : '长按链接可打开文件或修改显示名称。文件仅在本机保存，不随备份传输。',
+                ? 'Ctrl + 单击打开链接；右键可修改显示名称。编辑后请保存任务。'
+                : '长按链接可打开或修改显示名称。文件仅在本机保存，不随备份传输。',
             style: Theme.of(context).textTheme.bodySmall),
         if (error != null)
           Text(error!,

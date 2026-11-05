@@ -77,7 +77,7 @@ void main() {
     await c.music('shuffle');
     await c.saveTracks();
     await Future<void>.delayed(const Duration(milliseconds: 250));
-    final retained = c.player!.state.playlistMode == PlaylistMode.loop &&
+    final retained = c.player!.state.playlistMode == PlaylistMode.none &&
         c.player!.state.shuffle;
     if (!retained) throw StateError('Playlist edit reset repeat/shuffle modes');
     await c.shutdown();

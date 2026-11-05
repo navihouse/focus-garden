@@ -309,6 +309,16 @@ class FocusRuntime private constructor(private val context: Context) {
         persist()
     }
     private var playlistId = ""
+    private fun applyMusicMode(shuffle: Boolean, repeat: String) {
+        if (shuffle) {
+            player.repeatMode = Player.REPEAT_MODE_OFF
+            player.shuffleModeEnabled = true
+        } else {
+            player.shuffleModeEnabled = false
+            player.repeatMode = if (repeat == "one") Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_ALL
+        }
+    }
+
     fun playlist(args: JSONObject) {
         val wasPlaying = player.isPlaying
         val oldIndex = player.currentMediaItemIndex
@@ -326,8 +336,7 @@ class FocusRuntime private constructor(private val context: Context) {
             media.getOrNull(index)?.localConfiguration?.uri == oldUri
         playlistId = nextId
         muted = args.optBoolean("muted", muted)
-        player.shuffleModeEnabled = args.optBoolean("shuffle", player.shuffleModeEnabled)
-        player.repeatMode = when(args.optString("repeat", "all")) { "one" -> Player.REPEAT_MODE_ONE; else -> Player.REPEAT_MODE_ALL }
+        applyMusicMode(args.optBoolean("shuffle"), args.optString("repeat", "all"))
         player.volume = args.optDouble("volume", .6).toFloat()
         if(media.isEmpty()) { player.clearMediaItems(); return }
         player.setMediaItems(media, index, if(keep) position else 0L)
@@ -348,8 +357,7 @@ class FocusRuntime private constructor(private val context: Context) {
                 }
             }
             "volume" -> player.volume = args.getDouble("value").toFloat()
-            "shuffle" -> player.shuffleModeEnabled = args.getBoolean("shuffle")
-            "repeat" -> player.repeatMode = when(args.getString("repeat")) { "one" -> Player.REPEAT_MODE_ONE; else -> Player.REPEAT_MODE_ALL }
+            "shuffle", "repeat" -> applyMusicMode(args.getBoolean("shuffle"), args.getString("repeat"))
             "mute" -> { muted = args.getBoolean("muted"); if(muted) player.pause() else if(phase == "focus") player.play() }
         }
         if(phase != "focus") player.pause()

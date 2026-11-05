@@ -9,6 +9,18 @@
 #include "flutter/generated_plugin_registrant.h"
 
 namespace {
+bool IsWebUrl(const std::string& url) {
+  const size_t start = url.rfind("https://", 0) == 0 ? 8 :
+                       url.rfind("http://", 0) == 0 ? 7 : 0;
+  if (!start || url.size() <= start || url.size() > 4096) return false;
+  for (const unsigned char ch : url) {
+    if (ch <= 0x20 || ch >= 0x7f || ch == '\\' || ch == '"') return false;
+  }
+  const auto authority = url.substr(start, url.find_first_of("/?#", start) - start);
+  return !authority.empty() && authority.front() != ':' &&
+         authority.find_first_of("@%") == std::string::npos;
+}
+
 bool ReadHotkey(const flutter::EncodableMap& args, const char* name, UINT* modifiers, UINT* key) {
   const auto entry = args.find(flutter::EncodableValue(name));
   const auto* binding = entry == args.end() ? nullptr : std::get_if<flutter::EncodableMap>(&entry->second);
@@ -97,6 +109,19 @@ bool FlutterWindow::OnCreate() {
       info.hwnd = GetHandle(); info.lpVerb = L"open"; info.lpFile = wide.c_str(); info.nShow = SW_SHOWNORMAL;
       if (ShellExecuteExW(&info)) result->Success();
       else result->Error("OPEN_FILE_FAILED", "No application could open this file");
+    } else if (call.method_name() == "openWebLink") {
+      const auto* args = std::get_if<flutter::EncodableMap>(call.arguments());
+      const auto it = args ? args->find(flutter::EncodableValue("url")) : flutter::EncodableMap::const_iterator{};
+      const auto* url = args && it != args->end() ? std::get_if<std::string>(&it->second) : nullptr;
+      if (!url || !IsWebUrl(*url)) {
+        result->Error("INVALID_WEB_URL", "Expected an HTTP or HTTPS URL"); return;
+      }
+      const std::wstring wide(url->begin(), url->end());
+      SHELLEXECUTEINFOW info{}; info.cbSize = sizeof(info);
+      info.fMask = SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
+      info.hwnd = GetHandle(); info.lpVerb = L"open"; info.lpFile = wide.c_str(); info.nShow = SW_SHOWNORMAL;
+      if (ShellExecuteExW(&info)) result->Success();
+      else result->Error("OPEN_WEB_FAILED", "No browser could open this URL");
     } else if (call.method_name() == "registerHotkeys") {
       const auto* args = std::get_if<flutter::EncodableMap>(call.arguments());
       UINT music_modifiers, music_key, timer_modifiers, timer_key;

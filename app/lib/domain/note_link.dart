@@ -1,7 +1,8 @@
-/// A local file reference occupies a range in the visible plain-text note.
+/// A file or web reference occupies a range in the visible plain-text note.
 class NoteFileLink {
   final int start, end;
   final String target;
+  bool get isWeb => webLinkUrl(target) != null;
   const NoteFileLink(this.start, this.end, this.target);
   NoteFileLink shifted(int delta) =>
       NoteFileLink(start + delta, end + delta, target);
@@ -16,6 +17,33 @@ class NoteFileLink {
     return NoteFileLink(value['start'], value['end'], value['target']);
   }
 }
+
+String? webLinkUrl(String input) {
+  final value = input.trim();
+  final scheme = RegExp(r'^https?://', caseSensitive: false).firstMatch(value);
+  if (value.length > 4096 ||
+      scheme == null ||
+      value.contains(RegExp(r'[\s\x00-\x1f\x7f\\]'))) {
+    return null;
+  }
+  final authority = value.substring(scheme.end).split(RegExp(r'[/#?]')).first;
+  if (authority.contains(RegExp(r'[@%]')) || authority.endsWith(':')) {
+    return null;
+  }
+  final uri = Uri.tryParse(value);
+  if (uri == null ||
+      uri.host.isEmpty ||
+      uri.host.contains('%') ||
+      uri.port < 1 ||
+      uri.port > 65535) {
+    return null;
+  }
+  final normalized = uri.toString();
+  return normalized.length <= 4096 ? normalized : null;
+}
+
+String? noteLinkTarget(String input) =>
+    webLinkUrl(input) ?? localFilePath(input);
 
 String? localFilePath(String input) {
   var value = input.trim();

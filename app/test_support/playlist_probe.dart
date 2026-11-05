@@ -2,7 +2,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/widgets.dart';
-import 'package:media_kit/media_kit.dart' show MediaKit;
+import 'package:media_kit/media_kit.dart' show MediaKit, PlaylistMode;
 import 'package:focus_garden/app_controller.dart';
 import 'package:focus_garden/domain/timer_engine.dart';
 
@@ -79,22 +79,25 @@ Future<void> main() async {
         'secondCycleReachesLast', () => current() == c.musicMediaKey(b));
     await waitFor(
         'secondCycleReturnsToFirst', () => current() == c.musicMediaKey(a));
-    if (c.hotkeyStatus['previous'] != true || c.hotkeyStatus['next'] != true) {
-      throw StateError(
-          'Track hotkeys unavailable; no keyboard input will be sent');
+    if (Platform.environment['FOCUS_PROBE_SKIP_SHORTCUTS'] != '1') {
+      if (c.hotkeyStatus['previous'] != true ||
+          c.hotkeyStatus['next'] != true) {
+        throw StateError(
+            'Track hotkeys unavailable; no keyboard input will be sent');
+      }
+      await File('$directory/shortcut-previous-ready').writeAsString('{}');
+      await waitFor(
+          'rightArrowDispatchesPrevious',
+          () =>
+              c.hotkeyActions.contains('previous') &&
+              current() == c.musicMediaKey(b));
+      await File('$directory/shortcut-next-ready').writeAsString('{}');
+      await waitFor(
+          'leftArrowDispatchesNext',
+          () =>
+              c.hotkeyActions.contains('next') &&
+              current() == c.musicMediaKey(a));
     }
-    await File('$directory/shortcut-previous-ready').writeAsString('{}');
-    await waitFor(
-        'rightArrowDispatchesPrevious',
-        () =>
-            c.hotkeyActions.contains('previous') &&
-            current() == c.musicMediaKey(b));
-    await File('$directory/shortcut-next-ready').writeAsString('{}');
-    await waitFor(
-        'leftArrowDispatchesNext',
-        () =>
-            c.hotkeyActions.contains('next') &&
-            current() == c.musicMediaKey(a));
     await c.perform(() => c.music('repeat')); // list -> single
     await c.perform(() => c.music('select', 1));
     await waitFor(
@@ -112,15 +115,29 @@ Future<void> main() async {
     checks['outsideNotQueued'] =
         !queue().contains(c.musicMediaKey(outside)) && queue().length == 2;
     await c.perform(() => c.music('shuffle'));
-    for (var i = 0; i < 2; i++) {
-      await c.perform(() => c.music('repeat'));
-      await c.perform(() => c.music('select', 1));
-      await waitFor('shuffledSelect$i',
-          () => current() == c.musicMediaKey(b) && c.trackIndex == 1);
-      await c.perform(() => c.music('next'));
-      checks['mode${i}Restricted'] = queue().every(
-          (uri) => [c.musicMediaKey(a), c.musicMediaKey(b)].contains(uri));
-    }
+    final player = c.player!;
+    checks['shuffleDisablesLoop'] =
+        player.state.shuffle && player.state.playlistMode == PlaylistMode.none;
+    checks['shuffleKeepsSelectedFolder'] =
+        queue().toSet().containsAll([c.musicMediaKey(a), c.musicMediaKey(b)]) &&
+            queue().length == 2;
+    final shuffledFirst = queue().first, shuffledLast = queue().last;
+    await c
+        .perform(() => c.music('select', c.canonicalTrackIndex(shuffledFirst)));
+    await waitFor(
+        'shufflePlaysFirst', () => c.playing && current() == shuffledFirst);
+    await waitFor(
+        'shuffleAdvances', () => c.playing && current() == shuffledLast);
+    await waitFor(
+        'shuffleStopsAtEnd', () => !c.playing && player.state.completed);
+    await c.perform(() => c.music('repeat'));
+    checks['listLoopDisablesShuffle'] =
+        !player.state.shuffle && player.state.playlistMode == PlaylistMode.loop;
+    await c.perform(() => c.music('select', 1));
+    await waitFor('listLoopPlaysAgain',
+        () => c.playing && current() == c.musicMediaKey(b));
+    await waitFor('listLoopWrapsAgain',
+        () => c.playing && current() == c.musicMediaKey(a));
     await c.perform(() => c.selectPlaylist(second));
     await waitFor(
         'switchReplacesQueue',
@@ -174,6 +191,7 @@ Future<void> main() async {
     await waitFor(
         'removingLastSongClearsQueue', () => queue().isEmpty && !c.playing);
     await c.perform(() => c.end());
+    await c.perform(() => c.music('shuffle'));
     await c.shutdown();
     controller = null;
     final restored = AppController();
@@ -183,7 +201,7 @@ Future<void> main() async {
         restored.currentPlaylist.id == empty &&
             restored.tracks.isEmpty &&
             restored.playlists.length == 2;
-    checks['modesPersist'] = restored.shuffle && restored.repeat == 'all';
+    checks['modesPersist'] = restored.shuffle && restored.repeat == 'off';
     checks['sourceFilesUnchanged'] =
         [a, b, outside].every((path) => File(path).existsSync());
     await restored.shutdown();
