@@ -9,6 +9,10 @@ import 'package:path/path.dart' as p;
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 import 'app_controller.dart';
+import 'automation_page.dart';
+import 'domain/automation.dart';
+import 'group_editor.dart';
+import 'task_drag.dart';
 import 'music_library_page.dart';
 import 'app_background.dart';
 import 'hotkey_editor.dart';
@@ -179,11 +183,14 @@ class Home extends StatefulWidget {
 class _HomeState extends State<Home> {
   int page = 0;
   bool taskDoneExpanded = false, focusDoneExpanded = false;
+  bool savingGroupOrder = false;
+  final collapsedGroups = <String>{};
   AppController get c => widget.c;
-  static const titles = ['专注', '任务', '音乐库', '历史记录', '统计报告'];
+  static const titles = ['专注', '任务', 'AUTO', '音乐库', '历史记录', '统计报告'];
   static const icons = [
     Icons.timelapse_rounded,
     Icons.checklist_rounded,
+    Icons.auto_awesome_outlined,
     Icons.library_music_outlined,
     Icons.history_rounded,
     Icons.insights_rounded
@@ -195,8 +202,13 @@ class _HomeState extends State<Home> {
     final body = switch (pinned ? 0 : page) {
       0 => focusPage(),
       1 => taskPage(),
-      2 => musicPage(),
-      3 => HistoryPage(c),
+      2 =>
+        AutomationPage(c, key: ObjectKey(c.automation), onOpenTask: (id) async {
+          final task = c.tasks.where((task) => task.id == id).firstOrNull;
+          if (task != null) await editTask(task);
+        }),
+      3 => musicPage(),
+      4 => HistoryPage(c),
       _ => ReportsPage(c)
     };
     return AppBackground(
@@ -236,9 +248,9 @@ class _HomeState extends State<Home> {
                     selectedIndex: page,
                     onDestinationSelected: (v) => setState(() => page = v),
                     destinations: List.generate(
-                        5,
+                        titles.length,
                         (i) => NavigationDestination(
-                            icon: Icon(icons[i]), label: titles[i]))),
+                            icon: navigationIcon(i), label: titles[i]))),
             body: Row(children: [
               if (wide && !pinned)
                 NavigationRail(
@@ -246,9 +258,9 @@ class _HomeState extends State<Home> {
                     labelType: NavigationRailLabelType.all,
                     onDestinationSelected: (v) => setState(() => page = v),
                     destinations: List.generate(
-                        5,
+                        titles.length,
                         (i) => NavigationRailDestination(
-                            icon: Icon(icons[i]), label: Text(titles[i])))),
+                            icon: navigationIcon(i), label: Text(titles[i])))),
               Expanded(
                   child: Column(children: [
                 if (c.message.isNotEmpty)
@@ -267,6 +279,13 @@ class _HomeState extends State<Home> {
               ])),
             ])));
   }
+
+  Widget navigationIcon(int index) => index == 2
+      ? Badge(
+          key: const ValueKey('auto-unread-badge'),
+          isLabelVisible: c.automation?.hasUnread ?? false,
+          child: Icon(icons[index]))
+      : Icon(icons[index]);
 
   Widget section(String title, Widget child, {String? subtitle}) => Card(
       child: Padding(
@@ -552,6 +571,12 @@ class _HomeState extends State<Home> {
           Expanded(
               child: Text('把大目标，变成眼前的小任务',
                   style: Theme.of(context).textTheme.titleLarge)),
+          TextButton.icon(
+              key: const ValueKey('manage-groups'),
+              onPressed: () => showGroupManager(context, c),
+              icon: const Icon(Icons.folder_outlined, size: 18),
+              label: const Text('分组')),
+          const SizedBox(width: 8),
           FilledButton.icon(
               onPressed: () => editTask(),
               icon: const Icon(Icons.add),
@@ -568,21 +593,139 @@ class _HomeState extends State<Home> {
       required List<Widget> before,
       List<Widget> after = const []}) {
     final active = c.tasks.where((t) => t.status != 'done').toList();
+    final slivers = <Widget>[SliverList.list(children: before)];
+    if (c.groups.isEmpty) {
+      slivers.add(SliverReorderableList(
+          key: ValueKey(focus ? 'focus-task-list' : 'main-task-list'),
+          itemCount: active.length,
+          onReorderItem: (oldIndex, newIndex) =>
+              c.perform(() => c.reorderTask(active[oldIndex].id, newIndex)),
+          itemBuilder: (_, index) =>
+              taskCard(active[index], dragIndex: index)));
+    } else {
+      for (final (group, items) in c.groupSections(active)) {
+        final id = group?.id ?? '';
+        final collapsed = collapsedGroups.contains(id);
+        slivers.add(SliverToBoxAdapter(
+            child: taskDropTarget(
+                id,
+                Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      groupHeader(group, items.length,
+                          focus: focus, collapsed: collapsed),
+                      if (!collapsed && items.isEmpty)
+                        Padding(
+                            padding:
+                                const EdgeInsets.only(left: 20, bottom: 16),
+                            child: Text('暂无任务',
+                                key: ValueKey(
+                                    'group-empty-${focus ? 'focus' : 'main'}-$id'),
+                                style: Theme.of(context).textTheme.bodySmall)),
+                    ]),
+                key: ValueKey('group-drop-${focus ? 'focus' : 'main'}-$id'))));
+        if (!collapsed) {
+          slivers.add(SliverList.builder(
+              key: ValueKey('${focus ? 'focus' : 'main'}-group-$id'),
+              itemCount: items.length,
+              itemBuilder: (_, index) => taskDropTarget(
+                  id, taskCard(items[index], crossGroupDrag: true),
+                  taskId: items[index].id)));
+        }
+      }
+    }
+    slivers.add(
+        SliverList.list(children: [...taskGroups(focus: focus), ...after]));
     return CustomScrollView(slivers: [
       SliverPadding(
           padding: const EdgeInsets.all(24),
-          sliver: SliverMainAxisGroup(slivers: [
-            SliverList.list(children: before),
-            SliverReorderableList(
-                key: ValueKey(focus ? 'focus-task-list' : 'main-task-list'),
-                itemCount: active.length,
-                onReorderItem: (oldIndex, newIndex) => c.perform(
-                    () => c.reorderTask(active[oldIndex].id, newIndex)),
-                itemBuilder: (_, index) =>
-                    taskCard(active[index], dragIndex: index)),
-            SliverList.list(children: [...taskGroups(focus: focus), ...after]),
-          ]))
+          sliver: SliverMainAxisGroup(slivers: slivers))
     ]);
+  }
+
+  Widget taskDropTarget(String groupId, Widget child,
+          {Key? key, String? taskId}) =>
+      TaskDropTarget(
+          key: key,
+          taskId: taskId,
+          onAccept: (task, after) => c.perform(() async {
+                await c.moveTaskToGroup(task.id, groupId,
+                    relativeToTaskId: taskId, after: after);
+                if (mounted) {
+                  setState(() => collapsedGroups.remove(groupId));
+                }
+              }),
+          child: child);
+
+  Widget groupHeader(TaskGroup? group, int count,
+      {required bool focus, required bool collapsed}) {
+    final id = group?.id ?? '';
+    final prefix = focus ? 'focus' : 'main';
+    final header = Semantics(
+        button: true,
+        expanded: !collapsed,
+        child: Padding(
+            padding: const EdgeInsets.only(top: 4, bottom: 8),
+            child: InkWell(
+                key: ValueKey('group-toggle-$prefix-$id'),
+                borderRadius: BorderRadius.circular(8),
+                onTap: () => setState(() {
+                      if (collapsed) {
+                        collapsedGroups.remove(id);
+                      } else {
+                        collapsedGroups.add(id);
+                      }
+                    }),
+                child: ConstrainedBox(
+                    constraints: const BoxConstraints(minHeight: 48),
+                    child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        child: Row(children: [
+                          if (group == null)
+                            const Icon(Icons.inbox_outlined, size: 16)
+                          else
+                            groupDot(group, size: 12),
+                          const SizedBox(width: 8),
+                          Flexible(
+                              child: Text(group?.name ?? '未分组',
+                                  key: ValueKey('group-title-$prefix-$id'),
+                                  style: Theme.of(context).textTheme.titleSmall,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis)),
+                          const SizedBox(width: 6),
+                          Text('$count',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .labelMedium
+                                  ?.copyWith(
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .onSurfaceVariant)),
+                        ]))))));
+    return GroupHeaderDropTarget(
+        key: ValueKey('group-header-drop-$prefix-$id'),
+        groupId: id,
+        onAccept: (sourceId) async {
+          if (savingGroupOrder) return;
+          setState(() => savingGroupOrder = true);
+          try {
+            await c.perform(() async {
+              final target = id.isEmpty
+                  ? c.groups.length - 1
+                  : c.groups.indexWhere((group) => group.id == id);
+              if (target >= 0) await c.reorderGroup(sourceId, target);
+            });
+          } finally {
+            if (mounted) setState(() => savingGroupOrder = false);
+          }
+        },
+        child: group == null
+            ? header
+            : TaskGroupDragHandle(
+                key: ValueKey('group-header-drag-$prefix-$id'),
+                group: group,
+                enabled: !savingGroupOrder,
+                child: Tooltip(message: '点击展开或收起，拖动调整分组顺序', child: header)));
   }
 
   List<Widget> taskGroups({required bool focus}) {
@@ -619,7 +762,8 @@ class _HomeState extends State<Home> {
     ];
   }
 
-  Widget taskCard(TaskItem t, {int? dragIndex}) {
+  Widget taskCard(TaskItem t, {int? dragIndex, bool crossGroupDrag = false}) {
+    final group = c.groups.where((g) => g.id == t.groupId).firstOrNull;
     final records =
         c.sessions.where((s) => s.taskId == t.id && s.includedInStatistics);
     final menu = PopupMenuButton<String>(
@@ -642,6 +786,10 @@ class _HomeState extends State<Home> {
               const PopupMenuDivider(),
               const PopupMenuItem(value: 'delete', child: Text('删除任务')),
             ]);
+    final nameText = Text(t.name,
+        style: TextStyle(
+            decoration:
+                t.status == 'done' ? TextDecoration.lineThrough : null));
     return Padding(
         key: ValueKey('task-card-${t.id}'),
         padding: const EdgeInsets.only(bottom: 12),
@@ -655,26 +803,35 @@ class _HomeState extends State<Home> {
                     icon: Icon(t.status == 'done'
                         ? Icons.check_circle_outline
                         : Icons.radio_button_unchecked)),
-                title: Text(t.name,
-                    style: TextStyle(
-                        decoration: t.status == 'done'
-                            ? TextDecoration.lineThrough
-                            : null)),
+                title: group == null
+                    ? nameText
+                    : Row(children: [
+                        groupDot(group, size: 8),
+                        const SizedBox(width: 8),
+                        Expanded(child: nameText),
+                      ]),
                 subtitle: Text(
                     '${t.category.isEmpty ? '未分类' : t.category} · ${taskStatuses[t.status]}\n'
-                    '完成 ${records.where((s) => s.completed).length} / ${t.estimate} 个番茄 · ${minutes(records.fold(0, (n, s) => n + s.milliseconds))} 分钟${t.due == null ? '' : '\n截止 ${dateText(t.due!)}'}${t.subtasks.isEmpty ? '' : '\n子任务 ${t.subtasks.where((s) => s.completed).length}/${t.subtasks.length} 完成'}${t.notes.isEmpty ? '' : '\n备注：${t.notes.replaceAll('\n', ' ')}'}',
+                    '完成 ${records.where((s) => s.completed).length} / ${t.estimate} 个番茄 · ${minutes(records.fold(0, (n, s) => n + s.milliseconds))} 分钟${t.due == null ? '' : '\n截止 ${taskDeadlineText(t)}'}${t.subtasks.isEmpty ? '' : '\n子任务 ${t.subtasks.where((s) => s.completed).length}/${t.subtasks.length} 完成'}${t.notes.isEmpty ? '' : '\n备注：${t.notes.replaceAll('\n', ' ')}'}',
                     maxLines: 5,
                     overflow: TextOverflow.ellipsis),
                 isThreeLine: true,
                 onTap: () => editTask(t),
-                trailing: dragIndex == null
-                    ? menu
-                    : MouseRegion(
+                trailing: crossGroupDrag
+                    ? MouseRegion(
                         cursor: SystemMouseCursors.grab,
-                        child: ReorderableDragStartListener(
+                        child: TaskDragHandle(
                             key: ValueKey('task-drag-${t.id}'),
-                            index: dragIndex,
-                            child: menu)))));
+                            task: t,
+                            child: menu))
+                    : dragIndex == null
+                        ? menu
+                        : MouseRegion(
+                            cursor: SystemMouseCursors.grab,
+                            child: ReorderableDragStartListener(
+                                key: ValueKey('task-drag-${t.id}'),
+                                index: dragIndex,
+                                child: menu)))));
   }
 
   Future<void> deleteTask(TaskItem task) async {
@@ -697,7 +854,8 @@ class _HomeState extends State<Home> {
 
   Future<void> editTask([TaskItem? task]) async {
     final saved = await showDialog<TaskItem>(
-        context: context, builder: (_) => TaskEditor(task: task));
+        context: context,
+        builder: (_) => TaskEditor(task: task, groups: c.groups));
     if (saved != null) {
       await c.perform(() async {
         await c.saveTask(saved);
@@ -1153,7 +1311,7 @@ class _HomeState extends State<Home> {
         builder: (ctx) => AlertDialog(
                 title: const Text('备份与合并'),
                 content: const Text(
-                    '备份包含任务与专注记录，不包含音乐和设备设置。可用同一备份在电脑与手机间合并记录；请先备份，再卸载应用。'),
+                    '备份包含任务、任务分组与专注记录，不包含音乐和设备设置。可用同一备份在电脑与手机间合并记录；请先备份，再卸载应用。'),
                 actions: [
                   TextButton(
                       onPressed: () {
@@ -1165,8 +1323,8 @@ class _HomeState extends State<Home> {
                       onPressed: () async {
                         Navigator.pop(ctx);
                         await c.perform(() async {
-                          final bytes =
-                              utf8.encode(exportBackup(c.tasks, c.sessions));
+                          final bytes = utf8.encode(
+                              exportBackup(c.tasks, c.sessions, c.groups));
                           final file = await FilePicker.platform.saveFile(
                               dialogTitle: '导出备份',
                               fileName:
@@ -1214,7 +1372,8 @@ class _HomeState extends State<Home> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                               Text(
-                                  '备份内 ${data.tasks.length} 个任务\n新增 ${data.sessions.length} 条记录，跳过 ${data.duplicateRecords} 条重复记录。'),
+                                  '备份内 ${data.tasks.length} 个任务、${data.groups.length} 个分组\n'
+                                  '新增 ${data.sessions.length} 条记录，跳过 ${data.duplicateRecords} 条重复记录。'),
                               if (data.conflicts.isNotEmpty)
                                 const Padding(
                                     padding: EdgeInsets.only(top: 16),

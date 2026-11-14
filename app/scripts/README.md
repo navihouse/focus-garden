@@ -30,3 +30,5 @@ Android：创建自己的签名密钥，在 `android/key.properties` 中配置 `
 1.8.0 新增 `test_support/playlist_probe.dart` 与 `verify-playlists.py <probe.exe> <空结果目录>`。脚本生成三个 WAV 样本，在独立数据库、零音量下验证自动切歌、列表循环、随机模式点歌映射、切换后替换队列、空歌单清空队列、专注暂停 / 继续联动、歌曲移动复制及重启恢复。不会读取用户音乐或个人记录；测试入口仅在显式隔离环境中运行。完成后重新构建 `lib/main.dart`，再打包正式发布。
 
 1.10.0 的歌单验证增加已成功注册的 Ctrl+Shift+右 / 左方向键真实输入，检查前 / 后一首分发、连续两次列表循环、单曲循环和暂停时切歌。脚本仅在隔离测试进程确认占有这两个组合键后发送键盘输入；未注册成功则停止，不对其他应用发送未确认的组合键。
+
+1.13.0 将采集脚本作为资源交付。安装 Python 的 `requests` 后，运行 `python app/assets/study_scraper.py --selftest` 验证解析，运行 `python app/test_support/test_scraper_security.py` 验证 Cookie 域名、HTTPS、跨站跳转阻断及平台内正常跳转；这两项均不联网、不读取真实 Cookie。Windows 工作流也执行这两项检查。`flutter test` 中的 Python 进程测试使用临时目录和虚构采集输出，验证启动、取消及网络等待不阻塞专注控制。

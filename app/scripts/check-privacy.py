@@ -10,9 +10,9 @@ def git(*arguments):
     return subprocess.check_output(['git', '-C', str(ROOT), *arguments])
 
 files = [name.decode('utf-8') for name in git('ls-files', '-z').split(b'\0') if name]
-forbidden_parts = {'.git', '.dart_tool', '.gradle', '.kotlin', '.idea', '.cxx', 'build', 'ephemeral', 'work', 'releases', 'signing'}
-forbidden_names = {'key.properties', 'local.properties', 'credentials.json', '.env'}
-forbidden_suffixes = {'.jks', '.keystore', '.pem', '.p12', '.pfx', '.sqlite', '.db', '.log', '.mp3', '.m4a', '.flac', '.wav', '.ogg', '.aac'}
+forbidden_parts = {'.git', '.dart_tool', '.gradle', '.kotlin', '.idea', '.cxx', 'build', 'ephemeral', 'work', 'releases', 'signing', 'cookies', 'automation-runs', '__pycache__'}
+forbidden_names = {'key.properties', 'local.properties', 'credentials.json', '.env', 'todos.json', 'todos.md'}
+forbidden_suffixes = {'.jks', '.keystore', '.pem', '.p12', '.pfx', '.sqlite', '.db', '.log', '.mp3', '.m4a', '.flac', '.wav', '.ogg', '.aac', '.pyc', '.pyo'}
 patterns = {
     'private key': r'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----',
     'GitHub token': r'\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b',

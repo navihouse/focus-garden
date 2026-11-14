@@ -34,3 +34,9 @@
 **/*.wav
 **/*.ogg
 **/*.aac
+**/cookies/
+**/automation-runs/
+**/todos.json
+**/todos.md
+**/__pycache__/
+**/*.py[cod]

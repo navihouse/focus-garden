@@ -41,7 +41,7 @@ void main() {
   ]) {
     final size = variant.$1;
     testWidgets(
-        'five pages and year heatmap fit ${size.width} ${variant.$2.name}',
+        'six pages and year heatmap fit ${size.width} ${variant.$2.name}',
         (tester) async {
       tester.view.physicalSize = size;
       tester.view.devicePixelRatio = 1;
@@ -92,7 +92,7 @@ void main() {
               home: Home(c))));
       expect(find.text('开始专注'), findsOneWidget);
       await screenshot('focus');
-      for (final page in ['任务', '音乐库', '历史记录', '统计报告']) {
+      for (final page in ['任务', 'AUTO', '音乐库', '历史记录', '统计报告']) {
         await tester.tap(find.text(page).last);
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);

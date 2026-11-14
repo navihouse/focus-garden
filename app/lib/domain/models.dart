@@ -26,10 +26,52 @@ class SubtaskItem {
   }
 }
 
+/// A user-created bucket for tasks. [color] is a `#RRGGBB` string so it
+/// survives JSON storage and backups without platform-specific color types.
+class TaskGroup {
+  static const defaultColor = '#5B8DEF';
+  static const palette = <String>[
+    '#5B8DEF', // 蓝
+    '#3CAF8B', // 绿
+    '#E3A13B', // 橙
+    '#D9605E', // 红
+    '#9A6BD8', // 紫
+    '#3FB5C8', // 青
+    '#C4719C', // 粉
+    '#78899A', // 灰
+  ];
+  static final idPattern = RegExp(r'^[A-Za-z0-9_-]{1,64}$');
+  static final colorPattern = RegExp(r'^#[0-9A-Fa-f]{6}$');
+  final String id, name, color;
+  const TaskGroup(
+      {required this.id, required this.name, this.color = defaultColor});
+  Json toJson() => {'id': id, 'name': name, 'color': color};
+  factory TaskGroup.fromJson(Json j) {
+    if (j['id'] is! String ||
+        j['name'] is! String ||
+        j['color'] is! String ||
+        !idPattern.hasMatch(j['id'] as String) ||
+        (j['name'] as String).trim().isEmpty ||
+        (j['name'] as String).trim().length > 40 ||
+        !colorPattern.hasMatch(j['color'] as String)) {
+      throw const FormatException('任务分组字段无效');
+    }
+    return TaskGroup(
+        id: j['id'] as String,
+        name: (j['name'] as String).trim(),
+        // Normalize case so equal colors compare equal in backups and dialogs.
+        color: (j['color'] as String).toUpperCase());
+  }
+  bool sameAs(TaskGroup other) =>
+      jsonEncode(toJson()) == jsonEncode(other.toJson());
+}
+
 class TaskItem {
   final String id, name, category, status;
+  final String groupId;
   final int estimate;
   final DateTime? due;
+  final DateTime? dueAt;
   final DateTime modified;
   final DateTime? completedAt;
   final String notes;
@@ -41,8 +83,10 @@ class TaskItem {
       required this.name,
       this.category = '',
       this.status = 'todo',
+      this.groupId = '',
       this.estimate = 1,
       this.due,
+      this.dueAt,
       this.notes = '',
       this.noteLinks = const [],
       this.sortOrder,
@@ -55,6 +99,7 @@ class TaskItem {
         'name': name,
         'category': category,
         'status': status,
+        'groupId': groupId,
         'estimate': estimate,
         'notes': notes,
         'noteLinks': noteLinks.map((link) => link.toJson()).toList(),
@@ -63,6 +108,7 @@ class TaskItem {
         'due': due == null
             ? null
             : '${due!.year}-${due!.month.toString().padLeft(2, '0')}-${due!.day.toString().padLeft(2, '0')}',
+        if (dueAt != null) 'dueAt': dueAt!.toUtc().toIso8601String(),
         'modified': modified.toIso8601String(),
         'completedAt': completedAt?.toIso8601String()
       };
@@ -70,7 +116,9 @@ class TaskItem {
     if ((j['notes'] != null && j['notes'] is! String) ||
         (j['subtasks'] != null && j['subtasks'] is! List) ||
         (j['noteLinks'] != null && j['noteLinks'] is! List) ||
-        (j['sortOrder'] != null && j['sortOrder'] is! int)) {
+        (j['sortOrder'] != null && j['sortOrder'] is! int) ||
+        (j['groupId'] != null && j['groupId'] is! String) ||
+        (j['dueAt'] != null && j['dueAt'] is! String)) {
       throw const FormatException('任务备注或子任务格式无效');
     }
     final t = TaskItem(
@@ -78,6 +126,7 @@ class TaskItem {
         name: j['name'] as String,
         category: j['category'] as String,
         status: j['status'] as String,
+        groupId: j['groupId'] as String? ?? '',
         estimate: j['estimate'] as int,
         notes: j['notes'] as String? ?? '',
         noteLinks: ((j['noteLinks'] as List?) ?? [])
@@ -88,6 +137,7 @@ class TaskItem {
             .map((s) => SubtaskItem.fromJson(asJson(s)))
             .toList(),
         due: j['due'] == null ? null : DateTime.parse(j['due'] as String),
+        dueAt: j['dueAt'] == null ? null : utc(j['dueAt'] as String),
         completedAt:
             j['completedAt'] == null ? null : utc(j['completedAt'] as String),
         modified: utc(j['modified'] as String));
@@ -95,6 +145,7 @@ class TaskItem {
         t.name.trim().isEmpty ||
         t.name.length > 200 ||
         t.category.length > 100 ||
+        (t.groupId.isNotEmpty && !TaskGroup.idPattern.hasMatch(t.groupId)) ||
         t.notes.length > 10000 ||
         t.noteLinks.length > 200 ||
         (t.sortOrder != null && t.sortOrder!.abs() > 9007199254740991) ||
@@ -104,6 +155,15 @@ class TaskItem {
         t.estimate > 999 ||
         !['todo', 'doing', 'done'].contains(t.status)) {
       throw const FormatException('任务字段无效');
+    }
+    if (t.dueAt != null) {
+      final civil = t.dueAt!.add(const Duration(hours: 8));
+      if (t.due == null ||
+          civil.year != t.due!.year ||
+          civil.month != t.due!.month ||
+          civil.day != t.due!.day) {
+        throw const FormatException('截止日期与北京时间不一致');
+      }
     }
     var previousEnd = 0;
     for (final link in t.noteLinks) {

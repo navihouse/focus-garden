@@ -10,6 +10,9 @@ import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
 import 'package:window_manager/window_manager.dart';
 import 'data/store.dart';
+import 'automation_controller.dart';
+import 'domain/automation.dart';
+import 'study_scraper.dart';
 import 'domain/models.dart';
 import 'domain/music_library.dart';
 import 'domain/timer_engine.dart';
@@ -29,7 +32,9 @@ class AppController extends ChangeNotifier {
   late LocalStore store;
   late Directory dataDirectory;
   List<TaskItem> tasks = [];
+  List<TaskGroup> groups = [];
   List<FocusSession> sessions = [];
+  AutomationController? automation;
   MusicLibrary musicLibrary = MusicLibrary.empty();
   List<MusicPlaylist> get playlists => musicLibrary.playlists;
   MusicPlaylist get currentPlaylist => musicLibrary.current;
@@ -174,11 +179,63 @@ class AppController extends ChangeNotifier {
         }
       }
     }
+    try {
+      await initializeAutomation(start: false);
+    } catch (_) {
+      message = '自动化初始化未完成，可在 AUTO 中重试。';
+    }
     _ticker = Timer.periodic(const Duration(milliseconds: 500), (_) {
       if (_busy) return;
       unawaited(perform(tick));
     });
+    automation?.start();
     notifyListeners();
+  }
+
+  Future<void> initializeAutomation({bool start = true}) async {
+    final managed =
+        File(p.join(dataDirectory.path, 'integrations', 'study_scraper.py'));
+    await managed.parent.create(recursive: true);
+    final bundled = await rootBundle.loadString('assets/study_scraper.py');
+    if (!await managed.exists() || await managed.readAsString() != bundled) {
+      await managed.writeAsString(bundled, flush: true);
+    }
+    const supplied = r'D:\Pomodoro Technique\study-scraper\study_scraper.py';
+    final script = await File(supplied).exists() ? supplied : managed.path;
+    final defaults = AutomationSettings(
+        scriptPath: script,
+        chaoxingCookiePath:
+            p.join(p.dirname(script), 'cookies', 'chaoxing.txt'),
+        moocCookiePath: p.join(p.dirname(script), 'cookies', 'icourse163.txt'));
+    final next = AutomationController(
+        store: store,
+        directory: dataDirectory,
+        tasks: () => tasks,
+        serialize: _serializeAutomation,
+        refreshTasks: refresh,
+        runner: PythonStudyScraperRunner(),
+        supportsScraper: Platform.isWindows,
+        initialSettings: defaults);
+    await next.initialize();
+    automation?.removeListener(notifyListeners);
+    automation?.dispose();
+    automation = next;
+    next.addListener(notifyListeners);
+    if (start) next.start();
+    notifyListeners();
+  }
+
+  Future<void> _serializeAutomation(Future<void> Function() action) {
+    final result = Completer<void>();
+    unawaited(perform(() async {
+      try {
+        await action();
+        result.complete();
+      } catch (e, stack) {
+        result.completeError(e, stack);
+      }
+    }));
+    return result.future;
   }
 
   Future<void> perform(Future<void> Function() action) {
@@ -198,11 +255,30 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> refresh() async {
+    groups = await store.groups();
     tasks = await store.tasks();
+    final known = {for (final group in groups) group.id};
+    final stray =
+        tasks.where((t) => t.groupId.isNotEmpty && !known.contains(t.groupId));
+    if (stray.isNotEmpty) {
+      // A removed or hand-edited group must not hide its tasks.
+      await store.transaction(() async {
+        for (final task in stray) {
+          await store
+              .task(TaskItem.fromJson({...task.toJson(), 'groupId': ''}));
+        }
+      });
+      tasks = await store.tasks();
+    }
+    final rank = {for (final (i, group) in groups.indexed) group.id: i};
     tasks.sort((a, b) {
       final group =
           (a.status == 'done' ? 1 : 0).compareTo(b.status == 'done' ? 1 : 0);
       if (group != 0) return group;
+      // Custom groups keep their manager order; ungrouped tasks come last.
+      final section = (rank[a.groupId] ?? groups.length)
+          .compareTo(rank[b.groupId] ?? groups.length);
+      if (section != 0) return section;
       // Completed tasks live in a folded group, newest completion first.
       final time = a.status == 'done'
           ? b.completionTime.compareTo(a.completionTime)
@@ -220,6 +296,81 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Active tasks split into display sections; a null group means ungrouped.
+  List<(TaskGroup?, List<TaskItem>)> groupSections(List<TaskItem> active) {
+    final known = {for (final group in groups) group.id};
+    return [
+      for (final group in groups)
+        (group, active.where((t) => t.groupId == group.id).toList()),
+      (null, active.where((t) => !known.contains(t.groupId)).toList()),
+    ];
+  }
+
+  String? groupNameError(String? value, {String? exceptId}) {
+    final name = (value ?? '').trim();
+    if (name.isEmpty) return '请填写分组名称';
+    if (name.length > 40) return '分组名称最多 40 字';
+    if (groups.any((g) => g.id != exceptId && g.name == name)) {
+      return '已有同名分组';
+    }
+    return null;
+  }
+
+  Future<void> saveGroups() async {
+    await store.saveGroups(groups);
+    await refresh();
+  }
+
+  Future<void> createGroup(String name, String color) async {
+    final error = groupNameError(name);
+    if (error != null) throw StateError(error);
+    groups.add(TaskGroup(id: uuid.v4(), name: name.trim(), color: color));
+    await saveGroups();
+  }
+
+  Future<void> updateGroup(String id,
+      {required String name, required String color}) async {
+    final index = groups.indexWhere((g) => g.id == id);
+    if (index < 0) throw StateError('分组已不存在');
+    final error = groupNameError(name, exceptId: id);
+    if (error != null) throw StateError(error);
+    groups[index] = TaskGroup(id: id, name: name.trim(), color: color);
+    await saveGroups();
+  }
+
+  Future<void> moveGroup(String id, int delta) async {
+    final index = groups.indexWhere((g) => g.id == id);
+    if (index < 0) return;
+    await reorderGroup(id, index + delta);
+  }
+
+  Future<void> reorderGroup(String id, int newIndex) async {
+    final oldIndex = groups.indexWhere((group) => group.id == id);
+    if (oldIndex < 0 ||
+        newIndex < 0 ||
+        newIndex >= groups.length ||
+        oldIndex == newIndex) {
+      return;
+    }
+    final reordered = List<TaskGroup>.from(groups);
+    reordered.insert(newIndex, reordered.removeAt(oldIndex));
+    await store.saveGroups(reordered);
+    await refresh();
+  }
+
+  Future<void> deleteGroup(String id) async {
+    // Tasks survive the group: they return to the ungrouped section.
+    final modified = DateTime.now().toUtc().toIso8601String();
+    await store.transaction(() async {
+      for (final task in tasks.where((t) => t.groupId == id)) {
+        await store.task(TaskItem.fromJson(
+            {...task.toJson(), 'groupId': '', 'modified': modified}));
+      }
+    });
+    groups.removeWhere((g) => g.id == id);
+    await saveGroups();
+  }
+
   Future<void> setFocusPinned(bool pinned) async {
     if (!Platform.isWindows) return;
     await windowManager.setAlwaysOnTop(pinned);
@@ -235,6 +386,7 @@ class AppController extends ChangeNotifier {
     }
     await store.task(TaskItem.fromJson({
       ...task.toJson(),
+      'groupId': groups.any((g) => g.id == task.groupId) ? task.groupId : '',
       'sortOrder': previous != null
           ? previous.sortOrder
           : task.sortOrder ??
@@ -249,24 +401,58 @@ class AppController extends ChangeNotifier {
     await refresh();
   }
 
-  Future<void> reorderTask(String id, int newIndex) async {
-    final activeTasks = tasks.where((t) => t.status != 'done').toList();
-    final oldIndex = activeTasks.indexWhere((t) => t.id == id);
+  Future<void> moveTaskToGroup(String id, String groupId,
+      {String? relativeToTaskId, bool after = false}) async {
+    if (groupId.isNotEmpty && !groups.any((group) => group.id == groupId)) {
+      throw StateError('目标分组已不存在');
+    }
+    final task = tasks.where((task) => task.id == id).firstOrNull;
+    if (task == null || task.status == 'done' || relativeToTaskId == id) return;
+    final peers = tasks
+        .where((peer) =>
+            peer.id != id && peer.status != 'done' && peer.groupId == groupId)
+        .toList();
+    var index = peers.length;
+    if (relativeToTaskId != null) {
+      index = peers.indexWhere((peer) => peer.id == relativeToTaskId);
+      if (index < 0) return;
+      if (after) index++;
+    }
+    peers.insert(index, task);
+    final modified = DateTime.now().toUtc().toIso8601String();
+    await store.transaction(() async {
+      for (var i = 0; i < peers.length; i++) {
+        final peer = peers[i];
+        if (peer.groupId == groupId && peer.sortOrder == i) continue;
+        await store.task(TaskItem.fromJson({
+          ...peer.toJson(),
+          'groupId': groupId,
+          'sortOrder': i,
+          'modified': modified,
+        }));
+      }
+    });
+    await refresh();
+  }
+
+  Future<void> reorderTask(String id, int newIndex,
+      {String groupId = ''}) async {
+    // Each visible section is its own reorderable list, so only renumber peers.
+    final peers =
+        tasks.where((t) => t.status != 'done' && t.groupId == groupId).toList();
+    final oldIndex = peers.indexWhere((t) => t.id == id);
     if (oldIndex < 0 ||
         newIndex < 0 ||
-        newIndex >= activeTasks.length ||
+        newIndex >= peers.length ||
         oldIndex == newIndex) {
       return;
     }
-    activeTasks.insert(newIndex, activeTasks.removeAt(oldIndex));
+    peers.insert(newIndex, peers.removeAt(oldIndex));
     final modified = DateTime.now().toUtc().toIso8601String();
     await store.transaction(() async {
-      for (var i = 0; i < activeTasks.length; i++) {
-        await store.task(TaskItem.fromJson({
-          ...activeTasks[i].toJson(),
-          'sortOrder': i,
-          'modified': modified
-        }));
+      for (var i = 0; i < peers.length; i++) {
+        await store.task(TaskItem.fromJson(
+            {...peers[i].toJson(), 'sortOrder': i, 'modified': modified}));
       }
     });
     await refresh();
@@ -1002,8 +1188,16 @@ class AppController extends ChangeNotifier {
 
   Future<void> shutdown() async {
     _ticker?.cancel();
+    await automation?.shutdown();
     if (!android) await perform(() => end(reason: 'exit'));
     await player?.dispose();
     await store.close();
+  }
+
+  @override
+  void dispose() {
+    automation?.removeListener(notifyListeners);
+    automation?.dispose();
+    super.dispose();
   }
 }

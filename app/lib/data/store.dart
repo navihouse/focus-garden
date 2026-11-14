@@ -43,6 +43,15 @@ class LocalStore extends GeneratedDatabase {
           [session.id, jsonEncode(session.toJson())]);
   Future<void> put(String id, Object value) => customStatement(
       'INSERT OR REPLACE INTO state VALUES (?,?)', [id, jsonEncode(value)]);
+  Future<List<TaskGroup>> groups() async {
+    final raw = await get('groups');
+    if (raw == null) return [];
+    if (raw is! List) throw const FormatException('任务分组数据无效');
+    return raw.map((v) => TaskGroup.fromJson(asJson(v))).toList();
+  }
+
+  Future<void> saveGroups(List<TaskGroup> value) =>
+      put('groups', value.map((g) => g.toJson()).toList());
   Future<Object?> get(String id) async {
     final row = await customSelect('SELECT data FROM state WHERE id = ?',
         variables: [Variable(id)]).getSingleOrNull();

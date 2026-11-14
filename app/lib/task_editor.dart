@@ -2,12 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'app_controller.dart';
 import 'domain/models.dart';
+import 'domain/reports.dart';
+import 'group_editor.dart';
 import 'notes_controller.dart';
 import 'notes_editor.dart';
 
 class TaskEditor extends StatefulWidget {
   final TaskItem? task;
-  const TaskEditor({super.key, this.task});
+  final List<TaskGroup> groups;
+  const TaskEditor({super.key, this.task, this.groups = const []});
   @override
   State<TaskEditor> createState() => _TaskEditorState();
 }
@@ -42,6 +45,29 @@ class _TaskEditorState extends State<TaskEditor> {
   final retired = <_SubtaskDraft>[];
   late String status = widget.task?.status ?? 'todo';
   late DateTime? due = widget.task?.due;
+  late TimeOfDay? dueTime = widget.task?.dueAt == null
+      ? null
+      : TimeOfDay.fromDateTime(beijing(widget.task!.dueAt!));
+  DateTime? get draftDueAt {
+    if (due == null || dueTime == null) return null;
+    final previous = widget.task?.dueAt;
+    if (previous != null) {
+      final civil = beijing(previous);
+      if (civil.year == due!.year &&
+          civil.month == due!.month &&
+          civil.day == due!.day &&
+          civil.hour == dueTime!.hour &&
+          civil.minute == dueTime!.minute) {
+        return previous;
+      }
+    }
+    return civilUtc(DateTime.utc(
+        due!.year, due!.month, due!.day, dueTime!.hour, dueTime!.minute));
+  }
+
+  late String groupId = widget.groups.any((g) => g.id == widget.task?.groupId)
+      ? widget.task!.groupId
+      : '';
 
   @override
   void dispose() {
@@ -97,7 +123,9 @@ class _TaskEditorState extends State<TaskEditor> {
       category: category.text.trim(),
       estimate: int.parse(estimate.text),
       status: status,
+      groupId: groupId,
       due: due,
+      dueAt: draftDueAt,
       notes: notes.text,
       noteLinks: notes.links,
       sortOrder: widget.task?.sortOrder,
@@ -174,6 +202,32 @@ class _TaskEditorState extends State<TaskEditor> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      DropdownButtonFormField<String>(
+                          key: const ValueKey('task-group'),
+                          initialValue: groupId,
+                          isExpanded: true,
+                          decoration: InputDecoration(
+                              labelText: '任务分组',
+                              helperText: widget.groups.isEmpty
+                                  ? '在任务页点击“分组”可新建分组'
+                                  : null),
+                          items: [
+                            const DropdownMenuItem(
+                                value: '', child: Text('未分组')),
+                            for (final group in widget.groups)
+                              DropdownMenuItem(
+                                  value: group.id,
+                                  child: Row(children: [
+                                    groupDot(group, size: 10),
+                                    const SizedBox(width: 8),
+                                    Flexible(
+                                        child: Text(group.name,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis))
+                                  ])),
+                          ],
+                          onChanged: (v) => setState(() => groupId = v ?? '')),
+                      const SizedBox(height: 16),
                       Text(
                           '子任务 · ${subtasks.where((s) => s.completed).length}/${subtasks.length} 完成',
                           style: Theme.of(context).textTheme.titleSmall),
@@ -295,6 +349,7 @@ class _TaskEditorState extends State<TaskEditor> {
                           validator: (v) =>
                               (v?.length ?? 0) > 100 ? '最多 100 字' : null),
                       const SizedBox(height: 12),
+                      const SizedBox(height: 16),
                       TextFormField(
                           key: const ValueKey('task-estimate'),
                           controller: estimate,
@@ -344,9 +399,35 @@ class _TaskEditorState extends State<TaskEditor> {
                             child: const Text('选择日期')),
                         IconButton(
                             tooltip: '清除截止日期',
-                            onPressed: () => setState(() => due = null),
+                            onPressed: () => setState(() {
+                                  due = null;
+                                  dueTime = null;
+                                }),
                             icon: const Icon(Icons.clear)),
                       ]),
+                      if (due != null)
+                        Row(children: [
+                          Expanded(
+                              child: Text(dueTime == null
+                                  ? '不设具体时间'
+                                  : '截止时间 ${dueTime!.format(context)}')),
+                          TextButton(
+                              key: const ValueKey('task-deadline-time'),
+                              onPressed: () async {
+                                final picked = await showTimePicker(
+                                    context: context,
+                                    initialTime: dueTime ??
+                                        const TimeOfDay(hour: 23, minute: 59));
+                                if (picked != null && mounted) {
+                                  setState(() => dueTime = picked);
+                                }
+                              },
+                              child: const Text('选择时间')),
+                          IconButton(
+                              tooltip: '清除具体时间',
+                              onPressed: () => setState(() => dueTime = null),
+                              icon: const Icon(Icons.clear)),
+                        ]),
                     ]))),
         actions: [
           TextButton(
