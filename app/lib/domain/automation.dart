@@ -3,7 +3,7 @@ import 'reports.dart';
 
 class AutomationSettings {
   final bool morningEnabled, scraperEnabled, chaoxing, mooc;
-  final int morningMinute, scraperMinute;
+  final int morningMinute, scraperMinute, expiredAfterDays;
   final String pythonPath, scriptPath, chaoxingCookiePath, moocCookiePath;
   final String importGroupId;
   const AutomationSettings({
@@ -18,6 +18,7 @@ class AutomationSettings {
     this.chaoxing = true,
     this.mooc = true,
     this.importGroupId = '',
+    this.expiredAfterDays = 0,
   });
 
   Json toJson() => {
@@ -32,6 +33,7 @@ class AutomationSettings {
         'chaoxing': chaoxing,
         'mooc': mooc,
         'importGroupId': importGroupId,
+        'expiredAfterDays': expiredAfterDays,
       };
 
   factory AutomationSettings.fromJson(Json value) {
@@ -47,6 +49,10 @@ class AutomationSettings {
       if ((j[key] as int) < 0 || (j[key] as int) > 1439) {
         throw const FormatException('定时时间无效');
       }
+    }
+    if ((j['expiredAfterDays'] as int) < -1 ||
+        (j['expiredAfterDays'] as int) > 3650) {
+      throw const FormatException('过期天数须为 0–3650，或选择不忽略');
     }
     for (final key in [
       'pythonPath',
@@ -76,11 +82,28 @@ class AutomationSettings {
       chaoxing: j['chaoxing'],
       mooc: j['mooc'],
       importGroupId: j['importGroupId'],
+      expiredAfterDays: j['expiredAfterDays'],
     );
   }
 
   AutomationSettings copyWith(Json values) =>
       AutomationSettings.fromJson({...toJson(), ...values});
+}
+
+String expiredRuleLabel(int days) => days == -1
+    ? '不忽略过期任务'
+    : days == 0
+        ? '忽略所有已过期任务'
+        : '忽略过期超过 $days 天的任务';
+
+bool shouldIgnoreExpired(DateTime? due, DateTime now, int days,
+    {bool markedExpired = false}) {
+  if (days < 0) return false;
+  if (due == null) return days == 0 && markedExpired;
+  final current = now.toUtc(), deadline = due.toUtc();
+  return days == 0
+      ? !deadline.isAfter(current)
+      : deadline.isBefore(current.subtract(Duration(days: days)));
 }
 
 String minuteLabel(int minute) =>

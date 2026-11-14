@@ -11,9 +11,11 @@ import 'domain/reports.dart';
 import 'study_scraper.dart';
 
 class AssignmentImportResult {
-  final int added, updated, preserved;
-  const AssignmentImportResult(this.added, this.updated, this.preserved);
-  String get label => '新增 $added 个，更新 $updated 个，保留 $preserved 个';
+  final int added, updated, preserved, ignored;
+  const AssignmentImportResult(this.added, this.updated, this.preserved,
+      [this.ignored = 0]);
+  String get label =>
+      '新增 $added 个，更新 $updated 个，保留 $preserved 个，忽略过期 $ignored 个';
 }
 
 class AutomationController extends ChangeNotifier {
@@ -161,9 +163,11 @@ class AutomationController extends ChangeNotifier {
   }
 
   Future<AssignmentImportResult> importPayload(ScrapePayload payload,
-      {String? groupId}) async {
+      {String? groupId, int? expiredAfterDays}) async {
     if (_closed) throw StateError('自动化已关闭');
-    var added = 0, updated = 0, preserved = 0;
+    final days = expiredAfterDays ?? settings.expiredAfterDays;
+    final currentTime = now().toUtc();
+    var added = 0, updated = 0, preserved = 0, ignored = payload.ignoredExpired;
     await serialize(() async {
       await store.transaction(() async {
         final current = {for (final task in await store.tasks()) task.id: task};
@@ -176,6 +180,12 @@ class AutomationController extends ChangeNotifier {
                 0, (value, task) => math.min(value, task.sortOrder ?? 0)) -
             payload.assignments.length;
         for (final entry in payload.assignments) {
+          if (shouldIgnoreExpired(entry.dueAt, currentTime, days,
+              markedExpired: ['已过期', '已截止', '已结束', '已关闭', '不可作答']
+                  .any(entry.remoteStatus.contains))) {
+            ignored++;
+            continue;
+          }
           final id = entry.taskId, old = current[id];
           final previous = ledger[id] == null ? null : asJson(ledger[id]);
           if (old == null && previous == null) {
@@ -216,7 +226,7 @@ class AutomationController extends ChangeNotifier {
       await refreshTasks();
     });
     _notify();
-    return AssignmentImportResult(added, updated, preserved);
+    return AssignmentImportResult(added, updated, preserved, ignored);
   }
 
   Future<void> runScraper({bool scheduled = false}) {
@@ -243,8 +253,9 @@ class AutomationController extends ChangeNotifier {
     try {
       final payload = await runner.run(config, output);
       if (_closed) return;
-      final result =
-          await importPayload(payload, groupId: config.importGroupId);
+      final result = await importPayload(payload,
+          groupId: config.importGroupId,
+          expiredAfterDays: config.expiredAfterDays);
       detail = result.label;
       if (payload.incompletePlatforms.isNotEmpty) {
         failure = '${payload.incompletePlatforms.join('、')}采集不完整，请检查登录状态和网络。';

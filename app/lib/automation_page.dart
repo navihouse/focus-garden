@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'app_controller.dart';
 import 'automation_controller.dart';
 import 'domain/automation.dart';
@@ -195,6 +196,106 @@ class _AutomationPageState extends State<AutomationPage> {
       final result = await auto!.importPayload(payload);
       if (mounted) setState(() => notice = result.label);
     });
+  }
+
+  Future<void> configureExpiry(AutomationController service) async {
+    final old = service.settings.expiredAfterDays;
+    var selected = [-1, 0, 7, 30].contains(old) ? old : -2;
+    final days = TextEditingController(text: '${old > 0 ? old : 7}');
+    final form = GlobalKey<FormState>();
+    final route = DialogRoute<int>(
+        context: context,
+        builder: (ctx) => StatefulBuilder(
+            builder: (ctx, update) => AlertDialog(
+                  title: const Text('过期任务规则'),
+                  content: SizedBox(
+                      width: 440,
+                      child: SingleChildScrollView(
+                          child: Form(
+                              key: form,
+                              child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    DropdownButtonFormField<int>(
+                                        key: const ValueKey('auto-expiry-rule'),
+                                        initialValue: selected,
+                                        isExpanded: true,
+                                        decoration: const InputDecoration(
+                                            labelText: '忽略规则'),
+                                        items: [
+                                          for (final value in [
+                                            0,
+                                            7,
+                                            30,
+                                            -2,
+                                            -1
+                                          ])
+                                            DropdownMenuItem(
+                                                value: value,
+                                                child: Text(value == -2
+                                                    ? '自定义过期天数'
+                                                    : expiredRuleLabel(value)))
+                                        ],
+                                        onChanged: (value) =>
+                                            update(() => selected = value!)),
+                                    if (selected == -2)
+                                      Padding(
+                                          padding:
+                                              const EdgeInsets.only(top: 16),
+                                          child: TextFormField(
+                                              key: const ValueKey(
+                                                  'auto-expiry-days'),
+                                              controller: days,
+                                              keyboardType:
+                                                  TextInputType.number,
+                                              inputFormatters: [
+                                                FilteringTextInputFormatter
+                                                    .digitsOnly,
+                                                LengthLimitingTextInputFormatter(
+                                                    4)
+                                              ],
+                                              decoration: const InputDecoration(
+                                                  labelText: '过期超过多少天后忽略'),
+                                              validator: (value) {
+                                                final n =
+                                                    int.tryParse(value ?? '');
+                                                return n == null ||
+                                                        n < 0 ||
+                                                        n > 3650
+                                                    ? '填写 0–3650 天'
+                                                    : null;
+                                              })),
+                                    const SizedBox(height: 14),
+                                    const Text(
+                                        '7 天即一周，30 天约一个月；按当前时间向前计算，恰好 N 天的保留。'
+                                        '无截止时间的任务不按天数推断。规则只影响采集和 JSON 导入，不删除已有任务。'),
+                                  ])))),
+                  actions: [
+                    TextButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        child: const Text('取消')),
+                    FilledButton(
+                        key: const ValueKey('auto-save-expiry'),
+                        onPressed: () {
+                          if (form.currentState!.validate()) {
+                            Navigator.pop(
+                                ctx,
+                                selected == -2
+                                    ? int.parse(days.text)
+                                    : selected);
+                          }
+                        },
+                        child: const Text('保存'))
+                  ],
+                )));
+    final value = await Navigator.of(context).push(route);
+    await route.completed;
+    days.dispose();
+    if (value != null && mounted) {
+      await execute(() => service.saveSettings(
+          service.settings.copyWith({'expiredAfterDays': value})));
+    }
   }
 
   Future<void> configureScraper(AutomationController service) async {
@@ -394,6 +495,15 @@ class _AutomationPageState extends State<AutomationPage> {
             const Text(
                 'Python 定时采集在 Windows 上运行。手机可导入脚本生成的 todos.json，或通过任务备份获取电脑版已采集的任务。'),
           const SizedBox(height: 14),
+          Text(expiredRuleLabel(service.settings.expiredAfterDays)),
+          OutlinedButton.icon(
+              key: const ValueKey('auto-configure-expiry'),
+              onPressed: busy || service.scraping
+                  ? null
+                  : () => configureExpiry(service),
+              icon: const Icon(Icons.filter_alt_outlined),
+              label: const Text('过期任务规则')),
+          const SizedBox(height: 10),
           OutlinedButton.icon(
               key: const ValueKey('auto-import-json'),
               onPressed: busy || service.scraping ? null : importJson,

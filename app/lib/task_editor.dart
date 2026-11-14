@@ -4,6 +4,7 @@ import 'app_controller.dart';
 import 'domain/models.dart';
 import 'domain/reports.dart';
 import 'group_editor.dart';
+import 'deadline_picker.dart';
 import 'notes_controller.dart';
 import 'notes_editor.dart';
 
@@ -380,54 +381,38 @@ class _TaskEditorState extends State<TaskEditor> {
                             ],
                             onChanged: (v) => status = v!),
                       const SizedBox(height: 8),
-                      Row(children: [
-                        Expanded(
-                            child: Text(due == null
-                                ? '不设截止日期'
-                                : '${due!.year}.${due!.month}.${due!.day}')),
-                        TextButton(
-                            onPressed: () async {
-                              final selected = await showDatePicker(
-                                  context: context,
-                                  initialDate: due ?? DateTime.now(),
-                                  firstDate: DateTime(2000),
-                                  lastDate: DateTime(2100));
-                              if (selected != null && mounted) {
-                                setState(() => due = selected);
-                              }
-                            },
-                            child: const Text('选择日期')),
-                        IconButton(
-                            tooltip: '清除截止日期',
-                            onPressed: () => setState(() {
-                                  due = null;
-                                  dueTime = null;
-                                }),
-                            icon: const Icon(Icons.clear)),
-                      ]),
-                      if (due != null)
-                        Row(children: [
-                          Expanded(
-                              child: Text(dueTime == null
-                                  ? '不设具体时间'
-                                  : '截止时间 ${dueTime!.format(context)}')),
-                          TextButton(
-                              key: const ValueKey('task-deadline-time'),
-                              onPressed: () async {
-                                final picked = await showTimePicker(
-                                    context: context,
-                                    initialTime: dueTime ??
-                                        const TimeOfDay(hour: 23, minute: 59));
-                                if (picked != null && mounted) {
-                                  setState(() => dueTime = picked);
-                                }
-                              },
-                              child: const Text('选择时间')),
-                          IconButton(
-                              tooltip: '清除具体时间',
-                              onPressed: () => setState(() => dueTime = null),
-                              icon: const Icon(Icons.clear)),
-                        ]),
+                      InputDecorator(
+                          key: const ValueKey('task-deadline'),
+                          decoration:
+                              const InputDecoration(labelText: '截止日期和时间'),
+                          child: Row(children: [
+                            Expanded(
+                                child: Text(due == null
+                                    ? '未设置'
+                                    : '${dayKey(due!)} · ${dueTime == null ? '全天' : dueTime!.format(context)}')),
+                            TextButton(
+                                key: const ValueKey('task-deadline-edit'),
+                                onPressed: () async {
+                                  final picked = await pickTaskDeadline(context,
+                                      date: due, time: dueTime);
+                                  if (picked != null && mounted) {
+                                    setState(() {
+                                      due = picked.date;
+                                      dueTime = picked.time;
+                                    });
+                                  }
+                                },
+                                child: const Text('选择日期和时间')),
+                            IconButton(
+                                tooltip: '清除截止日期',
+                                onPressed: due == null
+                                    ? null
+                                    : () => setState(() {
+                                          due = null;
+                                          dueTime = null;
+                                        }),
+                                icon: const Icon(Icons.clear)),
+                          ])),
                     ]))),
         actions: [
           TextButton(

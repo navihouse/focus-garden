@@ -86,6 +86,8 @@ CLOSED_MARKERS = (
     "已过期", "已批阅", "已评", "不可作答", "查看答案", "已阅",
 )
 # 出现这些词说明还是待完成状态
+COMPLETED_MARKERS = ("待批阅", "已提交", "已交", "已完成", "已批阅", "已评", "查看答案", "已阅")
+EXPIRED_MARKERS = ("已结束", "已关闭", "已截止", "已过期", "不可作答")
 OPEN_MARKERS = ("做作业", "未完成", "未交", "未提交", "可作答", "待完成", "开始答题", "去完成", "进入考试")
 
 
@@ -695,6 +697,8 @@ def parse_cx_task_html(html: str, course: Course, hint: str) -> list[Item]:
             status=status,
             url=url,
             uid=uid,
+            extra={"completed": any(m in text for m in COMPLETED_MARKERS),
+                   "open": not is_closed_text(text, inner)},
         ))
     return items
 
@@ -881,7 +885,9 @@ def ic_item_from(record: dict[str, Any], course: dict[str, Any], source: str,
         status=status,
         url=ic_learn_url(course, tab),
         uid=f"icourse163:{course['course_id']}:{course['term_id']}:{source}:{item_id}",
-        extra={"open": ic_is_open(deadline, status, used_try, score, now)},
+        extra={"open": ic_is_open(deadline, status, used_try, score, now),
+               "completed": any(m in status for m in COMPLETED_MARKERS)
+                   or (used_try is not None and used_try > 0) or (score is not None and score > 0)},
     )
 
 
@@ -1062,17 +1068,31 @@ def sort_items(items: list[Item]) -> list[Item]:
     return sorted(items, key=lambda it: (it.due is None, it.due or datetime.max.replace(tzinfo=CST), it.course, it.title))
 
 
-def filter_items(items: list[Item], include_all: bool, horizon_days: int | None, now: datetime) -> list[Item]:
+def filter_items(items: list[Item], include_all: bool, horizon_days: int | None,
+                 now: datetime, expired_after_days: int | None = None,
+                 stats: dict[str, int] | None = None) -> list[Item]:
     kept: list[Item] = []
+    days = expired_after_days if expired_after_days is not None else (-1 if include_all else 0)
+    ignored = 0
     for item in items:
-        is_open = item.extra.pop("open", None)
-        if not include_all:
-            if is_open is False:
-                continue
+        completed = item.extra.get("completed") is True or any(m in item.status for m in COMPLETED_MARKERS)
+        marked_expired = any(m in item.status for m in EXPIRED_MARKERS)
+        is_expired = item.due is not None and item.due <= now
+        if not include_all and (completed or
+                (item.extra.get("open") is False and not (marked_expired or is_expired))):
+            continue
+        too_old = days >= 0 and (
+            (days == 0 and (is_expired or (item.due is None and marked_expired))) or
+            (days > 0 and item.due is not None and item.due < now - timedelta(days=days)))
+        if too_old:
+            ignored += 1
+            continue
         if horizon_days is not None and item.due is not None:
             if item.due > now + timedelta(days=horizon_days):
                 continue
         kept.append(item)
+    if stats is not None:
+        stats["ignored_expired"] = ignored
     return sort_items(kept)
 
 
@@ -1080,7 +1100,9 @@ def write_json(path: Path, items: list[Item], reports: list[SourceReport], args,
     payload = {
         "generated_at": fmt_cst(now),
         "timezone": "Asia/Shanghai",
-        "filters": {"include_all": args.include_all, "horizon_days": args.horizon_days},
+        "filters": {"include_all": args.include_all, "horizon_days": args.horizon_days,
+                    "ignore_expired_days": args.expired_after_days},
+        "ignored_expired": getattr(args, "ignored_expired", 0),
         "count": len(items),
         "sources": [
             {"platform": r.platform, "label": PLATFORM_LABEL.get(r.platform, r.platform),
@@ -1296,6 +1318,16 @@ def build_parser() -> argparse.ArgumentParser:
                    help="连已完成 / 已过期的也列出来")
     p.add_argument("--days", dest="horizon_days", type=int, default=None,
                    help="只看未来 N 天内截止的")
+    def expired_days(value):
+        try:
+            days = int(value)
+        except ValueError:
+            raise argparse.ArgumentTypeError("过期天数须为整数") from None
+        if days < -1 or days > 3650:
+            raise argparse.ArgumentTypeError("过期天数须为 -1 至 3650")
+        return days
+    p.add_argument("--ignore-expired-days", dest="expired_after_days", type=expired_days,
+                   default=None, help="忽略过期超过 N 天的任务；0 忽略全部过期，-1 不忽略；默认 0（--all 除外）")
     p.add_argument("--workers", type=int, default=6, help="并发数（默认 6）")
     p.add_argument("--timeout", type=float, default=20.0, help="单请求超时秒数（默认 20）")
     p.add_argument("--probe", action="store_true", help="只检查 Cookie 是否可用，不抓任务")
@@ -1341,7 +1373,10 @@ def run_demo(args) -> int:
         SourceReport(platform=PLATFORM_ICOURSE163, ok=True, courses=2, items=3),
     ]
 
-    kept = filter_items(items, args.include_all, args.horizon_days, now)
+    stats = {}
+    kept = filter_items(items, args.include_all, args.horizon_days, now,
+                        args.expired_after_days, stats)
+    args.ignored_expired = stats.get("ignored_expired", 0)
     out_dir = Path(args.out_dir)
     json_path = out_dir / f"demo_{args.json_name}"
     md_path = out_dir / f"demo_{args.md_name}"
@@ -1421,7 +1456,10 @@ def main(argv: list[str] | None = None) -> int:
         if platform in cookie_map:
             run(platform, cookie_map[platform])
 
-    kept = filter_items(all_items, args.include_all, args.horizon_days, now)
+    stats = {}
+    kept = filter_items(all_items, args.include_all, args.horizon_days, now,
+                        args.expired_after_days, stats)
+    args.ignored_expired = stats.get("ignored_expired", 0)
 
     if args.probe:
         log("")

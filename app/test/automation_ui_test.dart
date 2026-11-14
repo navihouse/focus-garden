@@ -193,4 +193,34 @@ void main() {
     await tester.pumpAndSettle();
     expect(saved!.dueAt, task.dueAt);
   });
+  for (final size in [const Size(1180, 1000), const Size(390, 844)]) {
+    testWidgets(
+        'custom expiry rules validate, filter pasted text and persist $size',
+        (tester) async {
+      await openAuto(tester, size, Brightness.dark);
+      await tester.tap(find.byKey(const ValueKey('auto-scraper-tab')));
+      await tester.pumpAndSettle();
+      final configure = find.byKey(const ValueKey('auto-configure-expiry'));
+      await tester.ensureVisible(configure);
+      await tester.tap(configure);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('auto-expiry-rule')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('自定义过期天数').last);
+      await tester.pumpAndSettle();
+      final days = find.byKey(const ValueKey('auto-expiry-days'));
+      await tester.enterText(days, '4x2');
+      expect(tester.widget<TextFormField>(days).controller!.text, '42');
+      await tester.enterText(days, '3651');
+      await tester.tap(find.byKey(const ValueKey('auto-save-expiry')));
+      await tester.pumpAndSettle();
+      expect(find.text('填写 0–3650 天'), findsOneWidget);
+      await tester.enterText(days, '14');
+      await tester.tap(find.byKey(const ValueKey('auto-save-expiry')));
+      await tester.pumpAndSettle();
+      await pumpUntil(tester, () => service.settings.expiredAfterDays == 14);
+      expect(find.text('忽略过期超过 14 天的任务'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  }
 }

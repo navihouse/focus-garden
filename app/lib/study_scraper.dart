@@ -90,8 +90,10 @@ class ScrapePayload {
   final DateTime generatedAt;
   final List<StudyAssignment> assignments;
   final List<String> incompletePlatforms;
+  final int ignoredExpired;
   const ScrapePayload(
-      this.generatedAt, this.assignments, this.incompletePlatforms);
+      this.generatedAt, this.assignments, this.incompletePlatforms,
+      {this.ignoredExpired = 0});
   factory ScrapePayload.parse(String text) {
     if (text.length > 10 * 1024 * 1024) {
       throw const FormatException('采集结果超过 10 MB');
@@ -144,7 +146,11 @@ class ScrapePayload {
       final kind = field('kind', 20);
       if (!['作业', '测验', '测试', '考试'].contains(kind)) continue;
       final status = field('status', 100, empty: true);
-      if (['已完成', '已提交', '已批阅', '已交', '已结束'].any(status.contains)) continue;
+      if (['已完成', '已提交', '已批阅', '已交', '待批阅', '已评', '已阅', '查看答案']
+              .any(status.contains) ||
+          (item['extra'] is Map && asJson(item['extra'])['completed'] == true)) {
+        continue;
+      }
       final rawUrl = field('url', 4096, empty: true);
       final url = rawUrl.isEmpty ? null : webLinkUrl(rawUrl);
       if (rawUrl.isNotEmpty && url == null) {
@@ -162,7 +168,12 @@ class ScrapePayload {
               ? null
               : scraperTime(item['due_at'] as String)));
     }
-    return ScrapePayload(generated, assignments, incomplete);
+    final ignored = data['ignored_expired'] ?? 0;
+    if (ignored is! int || ignored < 0 || ignored > 1000000) {
+      throw const FormatException('忽略任务数量无效');
+    }
+    return ScrapePayload(generated, assignments, incomplete,
+        ignoredExpired: ignored);
   }
 }
 
@@ -214,6 +225,8 @@ class PythonStudyScraperRunner implements StudyScraperRunner {
             '--out-dir',
             output.path,
             '--quiet',
+            '--ignore-expired-days',
+            '${settings.expiredAfterDays}',
             '--workers',
             '2',
             '--timeout',

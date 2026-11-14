@@ -35,7 +35,7 @@ void main() {
                     child: const Text('Open'))))));
     await tester.tap(find.text('Open'));
     await tester.pumpAndSettle();
-    await tester.ensureVisible(find.text('选择日期'));
+    await tester.ensureVisible(find.text('选择日期和时间'));
     await tester.pumpAndSettle();
     final field = tester.getRect(find.byKey(const ValueKey('task-name')));
     final title = tester.getRect(find.text('任务详情'));
@@ -74,7 +74,7 @@ void main() {
                       child: const Text('Open'))))));
       await tester.tap(find.text('Open'));
       await tester.pumpAndSettle();
-      await tester.ensureVisible(find.text('选择日期'));
+      await tester.ensureVisible(find.text('选择日期和时间'));
       await tester.pumpAndSettle();
       final field = find.byKey(const ValueKey('task-name'));
       final bounds = tester.getRect(field);

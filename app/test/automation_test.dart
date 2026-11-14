@@ -349,4 +349,89 @@ void main() {
     expect(service.scraping, false);
     expect(await store.tasks(), isEmpty);
   });
+  test('expiry settings migrate and validate custom integer days', () async {
+    expect(AutomationSettings.fromJson({}).expiredAfterDays, 0);
+    for (final days in [-1, 0, 7, 30, 3650]) {
+      final value = AutomationSettings(expiredAfterDays: days);
+      expect(
+          AutomationSettings.fromJson(value.toJson()).expiredAfterDays, days);
+    }
+    for (final bad in [-2, 3651, 1.5, '7', null]) {
+      expect(() => AutomationSettings.fromJson({'expiredAfterDays': bad}),
+          throwsFormatException);
+    }
+    await service.saveSettings(const AutomationSettings(expiredAfterDays: 14));
+    expect(
+        asJson(await store.get('automation.settings'))['expiredAfterDays'], 14);
+  });
+
+  test('expiry uses rolling days, exact boundaries and unknown deadlines', () {
+    final now = DateTime.utc(2028, 3, 1);
+    expect(shouldIgnoreExpired(now, now, 0), true);
+    expect(shouldIgnoreExpired(now.add(const Duration(seconds: 1)), now, 0),
+        false);
+    expect(shouldIgnoreExpired(now.subtract(const Duration(days: 7)), now, 7),
+        false);
+    expect(
+        shouldIgnoreExpired(
+            now.subtract(const Duration(days: 7, seconds: 1)), now, 7),
+        true);
+    expect(shouldIgnoreExpired(DateTime.utc(2028, 1, 30), now, 30), true);
+    expect(shouldIgnoreExpired(DateTime.utc(2028, 1, 31), now, 30), false);
+    expect(shouldIgnoreExpired(DateTime.utc(2027), now, -1), false);
+    expect(shouldIgnoreExpired(null, now, 7, markedExpired: true), false);
+    expect(shouldIgnoreExpired(null, now, 0), false);
+    expect(shouldIgnoreExpired(null, now, 0, markedExpired: true), true);
+  });
+
+  test('ignored tasks are not tombstoned and relaxation can import them later',
+      () async {
+    clock = DateTime.utc(2026, 11, 14);
+    final payload = ScrapePayload.parse(scrapeFixture([
+      studyFixture(id: 'recent', due: '2026-11-10T08:00:00+08:00'),
+      studyFixture(id: 'week', due: '2026-11-07T08:00:00+08:00'),
+      studyFixture(id: 'old', due: '2026-11-07T07:59:59+08:00'),
+      studyFixture(id: 'unknown', due: null),
+    ]));
+    var result = await service.importPayload(payload);
+    expect(result.added, 1);
+    expect(result.ignored, 3);
+    service.settings = const AutomationSettings(expiredAfterDays: 7);
+    result = await service.importPayload(payload);
+    expect(result.added, 2);
+    expect(result.ignored, 1);
+    expect(rows.length, 3);
+    service.settings = const AutomationSettings(expiredAfterDays: -1);
+    result = await service.importPayload(payload);
+    expect(result.added, 1);
+    expect(rows.length, 4);
+    service.settings = const AutomationSettings(expiredAfterDays: 0);
+    await service.importPayload(payload);
+    expect(rows.length, 4, reason: '收紧规则不得删除已有任务');
+  });
+
+  test(
+      'script and importer ignored counts combine; completed records stay excluded',
+      () async {
+    final data = asJson(jsonDecode(scrapeFixture([
+      {...studyFixture(id: 'done'), 'status': '待批阅'},
+      {
+        ...studyFixture(id: 'scored'),
+        'extra': {'completed': true}
+      },
+      {
+        ...studyFixture(id: 'expired', due: '2026-11-01T12:00:00+08:00'),
+        'status': '已结束'
+      },
+    ])));
+    data['ignored_expired'] = 6;
+    final payload = ScrapePayload.parse(jsonEncode(data));
+    expect(payload.assignments.length, 1);
+    final result = await service.importPayload(payload);
+    expect(result.ignored, 7);
+    expect(rows, isEmpty);
+    expect(
+        () => ScrapePayload.parse(jsonEncode({...data, 'ignored_expired': -1})),
+        throwsFormatException);
+  });
 }

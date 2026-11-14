@@ -31,9 +31,11 @@ p.add_argument('--source'); p.add_argument('--chaoxing-cookie')
 p.add_argument('--icourse163-cookie'); p.add_argument('--out-dir')
 p.add_argument('--quiet', action='store_true')
 p.add_argument('--workers'); p.add_argument('--timeout')
+p.add_argument('--ignore-expired-days')
 a=p.parse_args()
 assert a.source=='chaoxing' and pathlib.Path(a.chaoxing_cookie).is_file()
 assert a.quiet and a.workers=='2' and a.timeout=='20'
+assert a.ignore_expired_days=='0'
 out=pathlib.Path(a.out_dir); out.mkdir(parents=True, exist_ok=True)
 (out/'todos.json').write_text(${jsonEncode(payload)}, encoding='utf-8')
 ''');
@@ -50,6 +52,15 @@ out=pathlib.Path(a.out_dir); out.mkdir(parents=True, exist_ok=True)
       () async {
     final result = await runner.run(config, Directory('${root.path}/输出 文件夹'));
     expect(result.assignments.single.title, '数学作业');
+  });
+
+  test('Python runner forwards the custom expiry window', () async {
+    final script = File(config.scriptPath);
+    await script.writeAsString((await script.readAsString()).replaceAll(
+        "a.ignore_expired_days=='0'", "a.ignore_expired_days=='14'"));
+    final result = await runner.run(config.copyWith({'expiredAfterDays': 14}),
+        Directory('${root.path}/custom-expiry'));
+    expect(result.assignments.length, 1);
   });
 
   test('failed process cannot import an otherwise valid result', () async {
@@ -98,7 +109,8 @@ time.sleep(60)
         serialize: (action) => c.perform(action),
         refreshTasks: c.refresh,
         runner: fake,
-        supportsScraper: true);
+        supportsScraper: true,
+        now: () => DateTime.utc(2026, 11, 13));
     final running = service.runScraper();
     await c.perform(() => c.startFocus(testSeconds: 90));
     expect(c.phase, Phase.focus);
