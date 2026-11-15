@@ -373,11 +373,8 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> saveTask(TaskItem task) async {
-    // Completion is only available from the list's circular button.
     final previous = tasks.where((t) => t.id == task.id).firstOrNull;
-    if (task.status == 'done' && previous?.status != 'done') {
-      throw StateError('请点击任务左侧圆环完成任务');
-    }
+    final completedNow = task.status == 'done' && previous?.status != 'done';
     await store.task(TaskItem.fromJson({
       ...task.toJson(),
       'groupId': groups.any((g) => g.id == task.groupId) ? task.groupId : '',
@@ -389,10 +386,13 @@ class AppController extends ChangeNotifier {
                       .fold<int>(0, (n, t) => math.min(n, t.sortOrder!)) -
                   1),
       'completedAt': task.status == 'done'
-          ? (previous?.completionTime ?? task.completionTime).toIso8601String()
+          ? (completedNow ? DateTime.now().toUtc() : previous!.completionTime)
+              .toIso8601String()
           : null,
     }));
+    if (completedNow && selectedTask == task.id && !active) selectedTask = null;
     await refresh();
+    if (completedNow) await _taskCompletionReminder();
   }
 
   Future<void> moveTaskToGroup(String id, String groupId,
@@ -464,7 +464,11 @@ class AppController extends ChangeNotifier {
     }));
     if (done && selectedTask == id && !active) selectedTask = null;
     await refresh();
-    if (done && !await playCompletionSound()) {
+    if (done) await _taskCompletionReminder();
+  }
+
+  Future<void> _taskCompletionReminder() async {
+    if (!await playCompletionSound()) {
       // Audio failure must not undo the saved task or stop a focus timer.
       message = '任务已完成，提示音暂时无法播放。';
     }

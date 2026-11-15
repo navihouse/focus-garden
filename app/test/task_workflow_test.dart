@@ -37,7 +37,8 @@ void main() {
         .setMockMethodCallHandler(AppController.native, null);
   });
 
-  test('completion goes before older completions, persists, and rings only once',
+  test(
+      'completion goes before older completions, persists, and rings only once',
       () async {
     c.selectedTask = 'a';
     await c.toggleTaskCompleted('a');
@@ -53,11 +54,9 @@ void main() {
     expect(sounds, ['taskCompleted']);
   });
 
-  test('editing cannot complete a task and does not ring', () async {
+  test('editing pending task notes without changing status does not ring',
+      () async {
     final task = c.tasks.first;
-    await expectLater(
-        c.saveTask(TaskItem.fromJson({...task.toJson(), 'status': 'done'})),
-        throwsStateError);
     await c.saveTask(TaskItem.fromJson(
         {...task.toJson(), 'notes': 'Remember the examples'}));
     expect(c.tasks.first.status, 'todo');

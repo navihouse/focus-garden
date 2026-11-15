@@ -365,21 +365,17 @@ class _TaskEditorState extends State<TaskEditor> {
                             return n < 1 || n > 999 ? '填写 1–999' : null;
                           }),
                       const SizedBox(height: 16),
-                      if (status == 'done')
-                        const InputDecorator(
-                            decoration: InputDecoration(labelText: '状态'),
-                            child: Text('已完成（点击列表左侧圆环可恢复）'))
-                      else
-                        DropdownButtonFormField<String>(
-                            initialValue: status,
-                            decoration: const InputDecoration(labelText: '状态'),
-                            items: const [
-                              DropdownMenuItem(
-                                  value: 'todo', child: Text('待办')),
-                              DropdownMenuItem(
-                                  value: 'doing', child: Text('进行中')),
-                            ],
-                            onChanged: (v) => status = v!),
+                      DropdownButtonFormField<String>(
+                          key: const ValueKey('task-status'),
+                          initialValue: status,
+                          decoration: const InputDecoration(labelText: '状态'),
+                          items: const [
+                            DropdownMenuItem(value: 'todo', child: Text('待办')),
+                            DropdownMenuItem(
+                                value: 'doing', child: Text('进行中')),
+                            DropdownMenuItem(value: 'done', child: Text('已完成')),
+                          ],
+                          onChanged: (v) => setState(() => status = v!)),
                       const SizedBox(height: 8),
                       InputDecorator(
                           key: const ValueKey('task-deadline'),

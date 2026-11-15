@@ -106,7 +106,7 @@ void main() {
   });
 
   testWidgets(
-      'only task circle completes, delete is confirmed, pin hides navigation',
+      'opening details alone does not complete, circle works, delete is confirmed and pin hides navigation',
       (tester) async {
     await desktop(tester);
     final c = AppController()

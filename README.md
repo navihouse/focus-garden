@@ -4,13 +4,13 @@
 
 专注花园是一款面向 Windows 与 Android 的离线番茄钟。你可以围绕任务计时、播放已保存的本地音乐，再用周报、月报和年报回顾投入情况。无需注册账号，两端通过备份文件手动合并记录。
 
-当前版本：**1.14.1（19）**。安装包与校验文件见 [GitHub Releases](https://github.com/navihouse/focus-garden/releases/tag/v1.14.1)。
+当前版本：**1.14.2（20）**。安装包与校验文件见 [GitHub Releases](https://github.com/navihouse/focus-garden/releases/tag/v1.14.2)。
 
 [下载与安装](#下载与安装) · [快速上手](#快速上手) · [功能亮点](#功能亮点) · [常用操作](#常用操作) · [更新历史](#更新历史)
 
 ## 下载与安装
 
-在 [GitHub Releases](https://github.com/navihouse/focus-garden/releases) 下载最新正式包，也可查看 [1.14.1 发布说明](https://github.com/navihouse/focus-garden/releases/tag/v1.14.1)。
+在 [GitHub Releases](https://github.com/navihouse/focus-garden/releases) 下载最新正式包，也可查看 [1.14.2 发布说明](https://github.com/navihouse/focus-garden/releases/tag/v1.14.2)。
 
 | 平台 | 下载文件 | 如何安装 |
 | --- | --- | --- |
@@ -52,7 +52,7 @@ Android 首次使用时，在专注页点击“开启提醒权限”，按提示
 
 ### 管理任务与子任务
 
-- 点击任务名称打开详情；**只有点击左侧圆环才标记大任务完成**。完成时响铃，再次点击可恢复待办。
+- 点击任务名称打开详情，“状态”可选择**待办、进行中、已完成**，点击“保存”生效；取消不改变状态。也可点击左侧圆环快捷完成，再次点击恢复待办。首次转为已完成时响铃，记录实际完成时间并收纳到“已完成”。
 - 在“添加下一步”填写子任务后按 Enter，可以连续录入；子任务勾选完成也会响铃。
 - 按住右侧三个点拖动排序：大任务在专注页和任务页共用顺序、自动保存；子任务的排序与其他详情修改需点击“保存”。
 - 轻点三个点打开菜单。大任务可确认删除，子任务可删除；删除任务会保留已有专注历史。
@@ -214,6 +214,12 @@ Windows 待机可试听，不会生成专注记录；Android 继续沿用专注�
 ## 更新历史
 
 以下按新到旧整理。1.5.0 起可查看对应 GitHub Release；更早版本依据 Git 提交与当时交付记录整理，历史版本是否可下载以 [Releases 列表](https://github.com/navihouse/focus-garden/releases) 为准。
+
+### [1.14.2](https://github.com/navihouse/focus-garden/releases/tag/v1.14.2) · 2026-11-15
+
+- 任务详情的状态下拉框新增“已完成”，已完成任务也可以从同一菜单改回待办或进行中，保存后生效。
+- 通过状态菜单完成任务同样记录完成时间、播放一次提示音并归入已完成；取消草稿不生效，重复编辑已完成任务不重置完成时间或重复响铃。
+- 完成提示音失败不撤销保存，也不打断正在运行的专注。左侧圆环保留原有快捷操作；未修改外部 `study-scraper` 目录。
 
 ### [1.14.1](https://github.com/navihouse/focus-garden/releases/tag/v1.14.1) · 2026-11-15
 
