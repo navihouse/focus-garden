@@ -7,6 +7,18 @@ typedef Json = Map<String, dynamic>;
 DateTime utc(String value) => DateTime.parse(value).toUtc();
 Json asJson(Object? value) => Map<String, dynamic>.from(value as Map);
 
+/// Current manual order for unfinished tasks, shared by display and imports.
+int comparePendingTaskOrder(TaskItem a, TaskItem b) {
+  final order = a.sortOrder != null || b.sortOrder != null
+      ? a.sortOrder == null
+          ? 1
+          : b.sortOrder == null
+              ? -1
+              : a.sortOrder!.compareTo(b.sortOrder!)
+      : b.modified.compareTo(a.modified);
+  return order != 0 ? order : a.id.compareTo(b.id);
+}
+
 class SubtaskItem {
   final String id, name;
   final bool completed;

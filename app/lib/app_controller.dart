@@ -282,13 +282,7 @@ class AppController extends ChangeNotifier {
       // Completed tasks live in a folded group, newest completion first.
       final time = a.status == 'done'
           ? b.completionTime.compareTo(a.completionTime)
-          : a.sortOrder != null || b.sortOrder != null
-              ? a.sortOrder == null
-                  ? 1
-                  : b.sortOrder == null
-                      ? -1
-                      : a.sortOrder!.compareTo(b.sortOrder!)
-              : b.modified.compareTo(a.modified);
+          : comparePendingTaskOrder(a, b);
       return time != 0 ? time : a.id.compareTo(b.id);
     });
     sessions = await store.sessions();

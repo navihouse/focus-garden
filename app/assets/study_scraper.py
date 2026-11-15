@@ -54,6 +54,21 @@ UA = (
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
 
+# 版本号：用来判断当前文件是不是被旧副本覆盖过（2026-11-15.2 = 含以下修复）
+SCRIPT_BUILD = "2026-11-15.2"
+
+# 脚本所在目录。所有相对路径（cookies/、out/）都相对**脚本**解析，
+# 而不是相对当前工作目录 —— 否则在 VS Code / 任务计划里双击运行，
+# 会因为 CWD 是编辑器安装目录而报「找不到 Cookie 文件」。
+BASE_DIR = Path(__file__).resolve().parent
+
+
+def _resolve_path(value: str | None) -> str | None:
+    if not value:
+        return value
+    p = Path(value).expanduser()
+    return str(p if p.is_absolute() else (BASE_DIR / p))
+
 
 def setup_stdio() -> None:
     """Windows 控制台默认 GBK，输出中文/符号会乱码或直接抛异常，这里统一切到 UTF-8。"""
@@ -88,6 +103,8 @@ CLOSED_MARKERS = (
 # 出现这些词说明还是待完成状态
 COMPLETED_MARKERS = ("待批阅", "已提交", "已交", "已完成", "已批阅", "已评", "查看答案", "已阅")
 EXPIRED_MARKERS = ("已结束", "已关闭", "已截止", "已过期", "不可作答")
+# 逾期超过这么多天的任务不再显示（用户 2026-11-14 的需求）；-1 关闭
+DEFAULT_OVERDUE_GRACE = 7
 OPEN_MARKERS = ("做作业", "未完成", "未交", "未提交", "可作答", "待完成", "开始答题", "去完成", "进入考试")
 
 
@@ -139,16 +156,28 @@ def human_left(dt: datetime | None, now: datetime) -> str:
 # Cookie 解析
 # --------------------------------------------------------------------------- #
 def _parse_header_cookies(text: str) -> dict[str, str]:
+    """解析「a=1; b=2」形式的 Cookie 串。
+
+    两个必须小心的点（都踩过坑）：
+    1) 文件里的 `#` 注释行不能参与解析 —— 模板里带一行示例 Cookie，
+       以前按 [;\\n] 硬切会把示例里的 `fid=1234` 之类当真值塞进去，
+       结果服务器判定「请重新登录」。
+    2) 值的双引号要原样保留 —— icourse163 的 STUDY_SESS / STUDY_INFO
+       在服务端是以带引号的形式校验的，去掉引号就变游客态（课程 0 门）。
+    """
     out: dict[str, str] = {}
-    for chunk in re.split(r"[;\n]", text):
-        chunk = chunk.strip()
-        if not chunk or "=" not in chunk:
+    for line in text.splitlines():
+        if line.lstrip().startswith("#"):
             continue
-        name, _, value = chunk.partition("=")
-        name = name.strip()
-        value = value.strip().strip('"')
-        if name and name not in out:
-            out[name] = value
+        for chunk in line.split(";"):
+            chunk = chunk.strip()
+            if not chunk or "=" not in chunk:
+                continue
+            name, _, value = chunk.partition("=")
+            name = name.strip()
+            value = value.strip()
+            if name and name not in out:
+                out[name] = value
     return out
 
 
@@ -215,7 +244,8 @@ def load_cookies(path: str | None, inline: str | None = None) -> dict[str, str]:
     if not p.exists():
         raise SystemExit(
             f"[错误] 找不到 Cookie 文件：{p}\n"
-            f"       请把浏览器里的 Cookie 粘贴到该文件（格式见 README.md）"
+            f"       请把浏览器里的 Cookie 粘贴到该文件（格式见 README.md）\n"
+            f"       约定位置：{BASE_DIR / 'cookies'}"
         )
     cookies = parse_cookie_text(p.read_text(encoding="utf-8-sig", errors="replace"))
     if not cookies:
@@ -500,13 +530,22 @@ def pick_status(text: str) -> str:
 # 学习通（超星）
 # --------------------------------------------------------------------------- #
 CX_COURSE_LIST_URLS = (
-    ("modern", "https://mooc1-1.chaoxing.com/mooc-ans/visit/courselistdata"),
+    # legacy 接口实测最稳：一次返回全部班级 + 课程，且 content 里带 course 详情
     ("legacy", "https://mooc1-api.chaoxing.com/mycourse/backclazzdata?view=json&rss=1"),
+    ("modern", "https://mooc1-1.chaoxing.com/mooc-ans/visit/courselistdata"),
 )
 CX_TASK_LIST_URLS = {
     "work": "https://mooc1-api.chaoxing.com/work/task-list",
     "exam": "https://mooc1-api.chaoxing.com/mooc-ans/exam/phone/task-list",
 }
+# 列表页只给「剩余 214 小时 19 分」这种相对时间，绝对截止时间必须回详情页拿。
+# 注意：列表里的 data 是 App 深链 android/mtaskmsgspecial，浏览器打开会报「无效的权限」。
+CX_DETAIL_URLS = {
+    "work": "https://mooc1-api.chaoxing.com/mooc-ans/work/phone/task-work",
+    "exam": "https://mooc1-api.chaoxing.com/exam-ans/exam/phone/task-exam",
+}
+_CX_DETAIL_ISO_RE = re.compile(r"截止时间[：:]\s*(\d{4}-\d{1,2}-\d{1,2}\s+\d{1,2}:\d{2})")
+_CX_DETAIL_SHORT_RE = re.compile(r"截止时间[：:]\s*(\d{1,2}-\d{1,2}\s+\d{1,2}:\d{2})")
 CX_HOME = "https://i.chaoxing.com/base"
 CX_COURSE_PAGE = "https://mooc1.chaoxing.com/"
 
@@ -533,7 +572,20 @@ def _course_from_flat(obj: dict[str, Any]) -> Course | None:
 
 
 def parse_cx_course_json(obj: Any) -> list[Course]:
-    """从 backclazzdata 一类的 JSON 里挖出课程；对结构变化尽量宽容。"""
+    """从 backclazzdata 一类的 JSON 里挖出课程；对结构变化尽量宽容。
+
+    现行结构（2026-11 实测）::
+
+        {"channelList": [
+            {"cataid": "100000002", "content": {
+                "id": <classId>, "cpi": <personId>, "name": <班级名>, "roletype": 3,
+                "course": {"data": [{"id": <courseId>, "name": <课程名>, ...}]}}},
+            {"cataid": "100000017", "content": {...}}   # 「已完结」文件夹，没有 course
+        ]}
+
+    两个坑：`content` 是**字符串化 JSON**（要先 json.loads），
+    课程 id/name 藏在 `course.data[0]` 而不是 `course.id`。
+    """
     out: list[Course] = []
     seen: set[tuple[str, str]] = set()
 
@@ -546,8 +598,39 @@ def parse_cx_course_json(obj: Any) -> list[Course]:
         seen.add(key)
         out.append(course)
 
+    def course_title(course: Any) -> str:
+        if not isinstance(course, dict):
+            return ""
+        title = _first_str(course, ("name", "courseName", "title")) or ""
+        if title:
+            return title
+        data = course.get("data")
+        if isinstance(data, list) and data and isinstance(data[0], dict):
+            return _first_str(data[0], ("name", "courseName", "title")) or ""
+        return ""
+
+    def course_id(course: Any) -> str | None:
+        if not isinstance(course, dict):
+            return None
+        cid = _first_str(course, ("id", "courseId"))
+        if cid:
+            return cid
+        data = course.get("data")
+        if isinstance(data, list) and data and isinstance(data[0], dict):
+            return _first_str(data[0], ("id", "courseId"))
+        return None
+
     def walk(node: Any, depth: int = 0) -> None:
         if depth > 12 or node is None:
+            return
+        if isinstance(node, str):
+            # content 是字符串化 JSON 的情况
+            text = node.strip()
+            if text[:1] in "{[":
+                try:
+                    walk(json.loads(text), depth + 1)
+                except ValueError:
+                    pass
             return
         if isinstance(node, list):
             for entry in node:
@@ -558,17 +641,24 @@ def parse_cx_course_json(obj: Any) -> list[Course]:
         add(_course_from_flat(node))
         course = node.get("course")
         clazz_list = node.get("clazz") or node.get("clazzs") or node.get("classList")
-        if isinstance(course, dict) and isinstance(clazz_list, list):
-            cid = _first_str(course, ("id", "courseId"))
-            title = _first_str(course, ("name", "courseName", "title")) or ""
-            cpi = _first_str(node, ("personid", "personId", "cpi")) or _first_str(course, ("personid", "personId")) or ""
-            for clazz in clazz_list:
-                if isinstance(clazz, dict):
-                    kid = _first_str(clazz, ("id", "classId", "clazzid"))
-                    if cid and kid and kid != "0":
-                        add(Course(cid, kid, cpi, title))
+        cid = course_id(course)
+        if cid:
+            title = course_title(course)
+            # 情况一：node = {course: {...}, clazz: [{id: classId}]}
+            if isinstance(clazz_list, list):
+                cpi = (_first_str(node, ("personid", "personId", "cpi"))
+                       or (_first_str(course, ("personid", "personId")) if isinstance(course, dict) else None) or "")
+                for clazz in clazz_list:
+                    if isinstance(clazz, dict):
+                        kid = _first_str(clazz, ("id", "classId", "clazzid"))
+                        if kid and kid != "0":
+                            add(Course(cid, kid, cpi, title))
+            # 情况二：node 自己就是班级 {id: classId, cpi, name, course: {data: [...]}}
+            class_id = _first_str(node, ("id", "classId", "clazzid", "clazzId"))
+            if class_id and class_id != "0":
+                add(Course(cid, class_id, _first_str(node, ("cpi", "personId", "personid")) or "", title))
         for value in node.values():
-            if isinstance(value, (dict, list)):
+            if isinstance(value, (dict, list, str)):
                 walk(value, depth + 1)
 
     walk(obj)
@@ -686,8 +776,11 @@ def parse_cx_task_html(html: str, course: Course, hint: str) -> list[Item]:
             kind = KIND_QUIZ if re.search(r"测验|测试|练习", title) else KIND_HOMEWORK
         status = pick_status(text)
         due = parse_due_text(text)
-        taskref = re.search(r"(?:taskrefId|workId|examId|jobid)=([\w-]+)", entry, re.I)
-        uid = f"chaoxing:{course.course_id}:{taskref.group(1) if taskref else url}"
+        taskref_match = re.search(r"(?:taskrefId|workId|examId|jobid)=([\w-]+)", entry, re.I)
+        taskref = taskref_match.group(1) if taskref_match else ""
+        # 列表里给的是 App 深链，浏览器打不开；换成能直接访问的详情页
+        url = cx_detail_url(course, kind, taskref) if taskref else _absolutize(entry)
+        uid = f"chaoxing:{course.course_id}:{taskref or url}"
         items.append(Item(
             platform=PLATFORM_CHAOXING,
             kind=kind,
@@ -698,9 +791,44 @@ def parse_cx_task_html(html: str, course: Course, hint: str) -> list[Item]:
             url=url,
             uid=uid,
             extra={"completed": any(m in text for m in COMPLETED_MARKERS),
-                   "open": not is_closed_text(text, inner)},
+                   "open": not is_closed_text(text, inner),
+                   "taskref": taskref,
+                   "left": next((m.group(0) for m in _REMAIN_RE.finditer(text)), "")},
         ))
     return items
+
+
+def cx_detail_url(course: Course, kind: str, taskref: str) -> str:
+    base = CX_DETAIL_URLS["exam" if kind == KIND_EXAM else "work"]
+    params = {
+        "courseId": course.course_id,
+        "classId": course.class_id,
+        "cpi": course.cpi,
+        "taskrefId": taskref,
+    }
+    if kind != KIND_EXAM:
+        params["fromGroup"] = "1"
+    return f"{base}?{urlencode(params)}"
+
+
+def cx_task_detail_due(http: Http, course: Course, kind: str, taskref: str) -> datetime | None:
+    """回详情页取绝对截止时间；失败就返回 None（由列表页的相对时间兜底）。"""
+    try:
+        resp = http.get(cx_detail_url(course, kind, taskref), referer=CX_COURSE_PAGE)
+    except HttpError:
+        return None
+    if resp.status_code >= 400:
+        return None
+    body = resp.text or ""
+    text = strip_tags(body)
+    m = _CX_DETAIL_ISO_RE.search(text) or _CX_DETAIL_ISO_RE.search(unescape(body))
+    if m:
+        # parse_due_text 认的是带「截止时间：」前缀的串
+        return parse_due_text("截止时间：" + m.group(1))
+    m = _CX_DETAIL_SHORT_RE.search(text)
+    if m:
+        return parse_due_text("截止时间：" + m.group(1))
+    return None
 
 
 def cx_course_tasks(http: Http, course: Course, log) -> list[Item]:
@@ -714,7 +842,15 @@ def cx_course_tasks(http: Http, course: Course, log) -> list[Item]:
             continue
         if resp.status_code >= 400 or looks_like_login_page(resp.text or ""):
             continue
-        items.extend(parse_cx_task_html(resp.text or "", course, hint))
+        parsed = parse_cx_task_html(resp.text or "", course, hint)
+        for item in parsed:
+            taskref = item.extra.get("taskref") or ""
+            if not taskref or item.extra.get("open") is False:
+                continue
+            exact = cx_task_detail_due(http, course, item.kind, taskref)
+            if exact:
+                item.due = exact
+        items.extend(parsed)
     return items
 
 
@@ -725,10 +861,8 @@ def collect_chaoxing(cookies: dict[str, str], args, log) -> tuple[list[Item], So
         report.warnings.append("没有提供 Cookie")
         return [], report
     http = Http(cookies, timeout=args.timeout, cookie_domain="chaoxing.com")
-    try:
-        http.get(CX_HOME, referer="https://i.chaoxing.com/")
-    except HttpError as exc:
-        log(f"  ! 学习通首页预热失败（继续尝试）：{exc}")
+    # 不做首页预热：i.chaoxing.com/base 会 302 到学校子站，被 host 白名单拦下，
+    # 而且预热对后续接口没有任何帮助。
 
     courses, warnings = cx_discover_courses(http, log)
     report.warnings.extend(warnings)
@@ -757,6 +891,17 @@ IC_TERM_URL = f"{IC_ORIGIN}/web/j/courseBean.getLastLearnedMocTermDto.rpc"
 IC_PAGE_SIZE = 20
 IC_MAX_PAGES = 20
 IC_LEGACY_QUIZ_TYPE = 5
+
+
+def IC_HEADERS(csrf: str) -> dict[str, str]:
+    """icourse163 的 .rpc 接口要带上浏览器同款的头，缺 edu-script-token 会被判跨域。"""
+    return {
+        "Origin": IC_ORIGIN,
+        "Referer": f"{IC_ORIGIN}/",
+        "edu-script-token": csrf,
+        "Content-Type": "application/x-www-form-urlencoded;charset=utf-8",
+        "Accept": "application/json, text/plain, */*",
+    }
 
 
 def ic_learn_url(course: dict[str, Any], tab: str) -> str:
@@ -956,7 +1101,7 @@ def ic_fetch_moc(http: Http, csrf: str, course: dict[str, Any], log) -> dict[str
     for attempt in range(3):
         try:
             resp = http.post(url, data={"termId": course["term_id"]},
-                             headers={"Origin": IC_ORIGIN}, referer=referer)
+                             headers=IC_HEADERS(csrf), referer=referer)
         except HttpError as exc:
             log(f"    ! {course['name']} 课程结构请求失败：{exc}")
             return None
@@ -991,11 +1136,9 @@ def collect_icourse163(cookies: dict[str, str], args, log) -> tuple[list[Item], 
             "中国大学MOOC 的 Cookie 里找不到 NTESSTUDYSI —— "
             "请确认是在 www.icourse163.org 登录后复制的完整 Cookie"
         )
-    try:
-        http.get(f"{IC_ORIGIN}/", referer=f"{IC_ORIGIN}/")
-    except HttpError as exc:
-        log(f"  ! 预热 icourse163 失败（继续尝试）：{exc}")
-    csrf = http.get_cookie("NTESSTUDYSI") or csrf
+    # 不要预热首页：实测先 GET https://www.icourse163.org/ 会轮换 NTESSTUDYSI，
+    # 随后带着旧 csrfKey 打 .rpc 就会返回 {"code":-1002,"message":"非法跨域请求"}。
+    # 只有 Cookie 里真的没有 NTESSTUDYSI 时才去首页（那种情况下面已经直接报错了）。
 
     courses: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
@@ -1006,7 +1149,7 @@ def collect_icourse163(cookies: dict[str, str], args, log) -> tuple[list[Item], 
                 resp = http.post(
                     url,
                     data={"type": "30", "p": str(page), "psize": str(IC_PAGE_SIZE), "courseType": course_type},
-                    headers={"Origin": IC_ORIGIN}, referer=f"{IC_ORIGIN}/",
+                    headers=IC_HEADERS(csrf), referer=f"{IC_ORIGIN}/",
                 )
             except HttpError as exc:
                 report.ok = False
@@ -1072,8 +1215,12 @@ def filter_items(items: list[Item], include_all: bool, horizon_days: int | None,
                  now: datetime, expired_after_days: int | None = None,
                  stats: dict[str, int] | None = None) -> list[Item]:
     kept: list[Item] = []
-    days = expired_after_days if expired_after_days is not None else (-1 if include_all else 0)
+    # 默认只忽略「逾期超过 7 天」的，一周内的逾期仍然列出来提醒
+    days = DEFAULT_OVERDUE_GRACE if expired_after_days is None else expired_after_days
+    if include_all:
+        days = -1
     ignored = 0
+    seen: set[tuple[str, str, str, str, str]] = set()
     for item in items:
         completed = item.extra.get("completed") is True or any(m in item.status for m in COMPLETED_MARKERS)
         marked_expired = any(m in item.status for m in EXPIRED_MARKERS)
@@ -1090,6 +1237,11 @@ def filter_items(items: list[Item], include_all: bool, horizon_days: int | None,
         if horizon_days is not None and item.due is not None:
             if item.due > now + timedelta(days=horizon_days):
                 continue
+        # 同一门课里同名的作业/测验常常在列表和章节里各出现一次，按内容去重
+        key = (item.platform, item.course, item.kind, item.title, fmt_cst(item.due) or "")
+        if key in seen:
+            continue
+        seen.add(key)
         kept.append(item)
     if stats is not None:
         stats["ignored_expired"] = ignored
@@ -1326,8 +1478,11 @@ def build_parser() -> argparse.ArgumentParser:
         if days < -1 or days > 3650:
             raise argparse.ArgumentTypeError("过期天数须为 -1 至 3650")
         return days
-    p.add_argument("--ignore-expired-days", dest="expired_after_days", type=expired_days,
-                   default=None, help="忽略过期超过 N 天的任务；0 忽略全部过期，-1 不忽略；默认 0（--all 除外）")
+    p.add_argument("--ignore-expired-days", "--overdue-grace",
+                   dest="expired_after_days", type=expired_days, default=None,
+                   help=(f"逾期超过 N 天的任务不再显示（默认 {DEFAULT_OVERDUE_GRACE}）；"
+                         "0 = 隐藏全部逾期，-1 = 不隐藏（--all 时一律不隐藏）"))
+    p.add_argument("--version", action="version", version=f"study_scraper {SCRIPT_BUILD}")
     p.add_argument("--workers", type=int, default=6, help="并发数（默认 6）")
     p.add_argument("--timeout", type=float, default=20.0, help="单请求超时秒数（默认 20）")
     p.add_argument("--probe", action="store_true", help="只检查 Cookie 是否可用，不抓任务")
@@ -1392,6 +1547,10 @@ def run_demo(args) -> int:
 def main(argv: list[str] | None = None) -> int:
     setup_stdio()
     args = build_parser().parse_args(argv)
+    # 在任何文件访问之前，把相对路径按脚本目录展开（见 BASE_DIR 说明）
+    args.chaoxing_cookie = _resolve_path(args.chaoxing_cookie)
+    args.icourse163_cookie = _resolve_path(args.icourse163_cookie)
+    args.out_dir = _resolve_path(args.out_dir)
     if args.selftest:
         return selftest()
     if args.demo:

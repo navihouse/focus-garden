@@ -68,6 +68,14 @@ class AutomationController extends ChangeNotifier {
       if (saved != null) settings = AutomationSettings.fromJson(asJson(saved));
       messages = _decodeMessages(await store.get('automation.inbox'));
       scrapeStatus = asJson(await store.get('automation.scrapeStatus') ?? {});
+      final imported = asJson(await store.get('automation.imports') ?? {});
+      if (imported.isNotEmpty) {
+        await serialize(() async {
+          final changed = await store
+              .transaction(() => _sortImportedTasks(imported.keys.toSet()));
+          if (changed) await refreshTasks();
+        });
+      }
     } catch (_) {
       error = '自动化数据读取失败，请检查本机数据或重新保存设置。';
     }
@@ -221,12 +229,66 @@ class AutomationController extends ChangeNotifier {
           }
           ledger[id] = entry.sourceFields;
         }
+        await _sortImportedTasks(ledger.keys.toSet());
         await store.put('automation.imports', ledger);
       });
       await refreshTasks();
     });
     _notify();
     return AssignmentImportResult(added, updated, preserved, ignored);
+  }
+
+  /// Sort imported peers in their existing slots, preserving manual task
+  /// positions and group order. Completed tasks retain their completion order.
+  Future<bool> _sortImportedTasks(Set<String> importedIds) async {
+    final sections = <String, List<TaskItem>>{};
+    for (final task in await store.tasks()) {
+      if (task.status != 'done') {
+        sections.putIfAbsent(task.groupId, () => []).add(task);
+      }
+    }
+    DateTime? deadline(TaskItem task) {
+      if (task.dueAt != null) return task.dueAt;
+      final date = task.due;
+      // A date-only task remains urgent through the end of its Beijing day.
+      return date == null
+          ? null
+          : civilUtc(DateTime.utc(
+              date.year, date.month, date.day, 23, 59, 59, 999, 999));
+    }
+
+    var changed = false;
+    for (final peers in sections.values) {
+      peers.sort(comparePendingTaskOrder);
+      final collected = peers.where((t) => importedIds.contains(t.id)).toList();
+      collected.sort((a, b) {
+        final first = deadline(a), second = deadline(b);
+        final time = first == null
+            ? second == null
+                ? 0
+                : 1
+            : second == null
+                ? -1
+                : first.compareTo(second);
+        return time != 0 ? time : comparePendingTaskOrder(a, b);
+      });
+      var cursor = 0;
+      final next = [
+        for (final task in peers)
+          importedIds.contains(task.id) ? collected[cursor++] : task,
+      ];
+      if (List.generate(peers.length, (i) => peers[i].id == next[i].id)
+          .every((same) => same)) {
+        continue;
+      }
+      changed = true;
+      for (var i = 0; i < next.length; i++) {
+        if (next[i].sortOrder == i) continue;
+        await store
+            .task(TaskItem.fromJson({...next[i].toJson(), 'sortOrder': i}));
+      }
+    }
+    return changed;
   }
 
   Future<void> runScraper({bool scheduled = false}) {
